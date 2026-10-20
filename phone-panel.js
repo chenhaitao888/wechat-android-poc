@@ -45,7 +45,7 @@ function refresh() {
     try {
         var s = readState();
         var active = workers().length > 0;
-        var names = {test_hold: "等待本批测试消息发完", preparing: "正在记录消息边界，请稍候", watching: "正在等待群里的 @", opening_group: "正在进入测试群", sending: "正在回复", waiting_for_test_group_list: "等待返回微信聊天列表", stopped: "已停止", halted: "已停止，需要检查"};
+        var names = {test_hold: "等待本批测试消息发完", preparing: "正在记录消息边界，请稍候", watching: "正在等待群里的 @", opening_group: "正在进入测试群", sending: "正在回复", waiting_for_test_group_list: "等待返回微信聊天列表", waiting_for_unlock: "等待手机亮屏并解锁", waiting_for_accessibility: "等待控件辅助恢复", stopped: "已停止", halted: "已停止，需要检查"};
         var label = active ? (files.exists(STOP) ? "正在停止，请稍候" : (names[s.status] || "正在启动")) : (s.status === "halted" ? names.halted : "已停止");
         var used = s.commands || {};
         var next = 6;

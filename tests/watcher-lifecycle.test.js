@@ -18,6 +18,11 @@ function host(options = {}) {
     let uiCalls = 0;
     let cancelled = 0;
     const keptAwake = [];
+    const observationTimes = [];
+    let rowClicks = 0;
+    const inWindow = range => range && now >= range[0] && now < range[1];
+    const available = () => !inWindow(options.accessibilityUnavailable);
+    const enabledServices = () => 'org.autojs.autoxjs.v7/Service' + (available() ? ':local.wechat.accessibilityhelper/Service' : '');
     const disk = new Map([[STATE, options.ledger ?? JSON.stringify(prior)]]);
     if (options.lock) disk.set(LOCK, 'another watcher owns this lock');
     if (options.stop) disk.set(STOP, 'requested');
@@ -37,7 +42,9 @@ function host(options = {}) {
         disk.set(target.name, disk.get(this.name)); disk.delete(this.name); return true;
     };
     File.prototype.delete = function() { return disk.delete(this.name); };
+    const autoxRuntime = {nativeRuntime:true};
     const globals = {
+        runtime:autoxRuntime,
         Date: ClockDate,
         files: {
             exists: name => disk.has(name),
@@ -51,12 +58,16 @@ function host(options = {}) {
         android: {
             os:{SystemClock:{elapsedRealtime:() => now}},
             content:{IntentFilter:function(){}},
-            provider:{Settings:{Secure:{getString:() => 'test-accessibility-service'}}},
+            provider:{Settings:{Secure:{getString:enabledServices}}},
         },
         context: {
             registerReceiver:() => null,
             getContentResolver:() => ({}),
-            getSystemService:() => ({isTouchExplorationEnabled:() => true}),
+            getSystemService: name => ({
+                accessibility:{isTouchExplorationEnabled:available},
+                power:{isInteractive:() => !inWindow(options.screenOff)},
+                keyguard:{isKeyguardLocked:() => !!inWindow(options.keyguardLocked)},
+            })[name],
         },
         device: {
             getBattery:() => 100, isCharging:() => false,
@@ -69,18 +80,27 @@ function host(options = {}) {
         },
         id:() => { uiCalls++; throw new Error('Native UI must not be touched by this lifecycle test'); },
         console:{error:() => {}},
+        __testObservation:() => {
+            observationTimes.push(now);
+            if (!options.realPreparation || now < (options.listReadyAt || 0)) return null;
+            return {preview:'previous reply',unread:'0',row:{click:() => {rowClicks++;return true;}}};
+        },
     };
     let context;
     globals.auto = {waitFor:() => {
         // Function declarations have been initialized at this point. Replace only
         // native UI boundaries; the actual lock, ledger, loop and finally execute.
-        vm.runInContext('prepareBoundary = function() {}; observation = function() { return null; };', context);
+        vm.runInContext('observation = __testObservation;', context);
+        if (options.realPreparation) {
+            vm.runInContext('chatRows = function() { return [{text:"previous reply",sender:"",direction:"outgoing",simpleText:true,fullyVisible:true}]; }; backToList = function() {}; waitForChatReady = function() {};', context);
+        } else vm.runInContext('prepareBoundary = function() {};', context);
     }};
     context = vm.createContext(globals);
     return {
         run:() => vm.runInContext(source, context, {timeout:2000}),
+        evaluate:code => vm.runInContext(code, context, {timeout:2000}),
         disk,
-        snapshot:() => ({now,uiCalls,cancelled,keptAwake,state:JSON.parse(disk.get(STATE)),events:(disk.get(BASE+'artifacts/watch-events.jsonl')||'').trim().split('\n').filter(Boolean).map(JSON.parse)}),
+        snapshot:() => ({runtimeUnchanged:context.runtime===autoxRuntime,now,uiCalls,cancelled,keptAwake,observationTimes,rowClicks,state:JSON.parse(disk.get(STATE)),events:(disk.get(BASE+'artifacts/watch-events.jsonl')||'').trim().split('\n').filter(Boolean).map(JSON.parse)}),
     };
 }
 
@@ -143,4 +163,86 @@ test('moving wall-clock time backwards does not extend the run duration', () => 
     assert.equal(s.now, 30*60*1000);
     assert.equal(s.state.stopReason, 'time_limit');
     assert.equal(h.disk.has(LOCK), false);
+});
+
+
+test('startup waits for accessibility and a readable list before recording its boundary', () => {
+    const h=host({realPreparation:true,accessibilityUnavailable:[0,2000],listReadyAt:3000,stopAfterMs:8000});
+    h.run(); const s=h.snapshot();
+    assert.ok(s.observationTimes.length > 0);
+    assert.ok(s.observationTimes.every(t => t >= 2000));
+    assert.equal(s.rowClicks, 1);
+    assert.equal(s.events.filter(e => e.type === 'baseline_recorded').length, 1);
+    assert.equal(s.state.stopReason, 'stop_file');
+});
+
+test('startup with a persistently unreadable list halts without clicking or losing history', () => {
+    const h=host({realPreparation:true,listReadyAt:30000}); h.run(); const s=h.snapshot();
+    assert.equal(s.now, 20000);
+    assert.equal(s.rowClicks, 0);
+    assert.equal(s.state.status, 'halted');
+    assert.match(s.state.error, /等待20秒/);
+    assert.deepEqual(s.state.commands, prior.commands);
+    assert.equal(h.disk.has(LOCK), false);
+});
+
+for (const [name, option, status] of [
+    ['screen is off', 'screenOff', 'waiting_for_unlock'],
+    ['lit screen is locked', 'keyguardLocked', 'waiting_for_unlock'],
+    ['accessibility provider is unavailable', 'accessibilityUnavailable', 'waiting_for_accessibility'],
+]) {
+    test(`polling suspends while ${name}, then resumes without clearing send history`, () => {
+        const h=host({[option]:[2400,7200],stopAfterMs:9600}); h.run(); const s=h.snapshot();
+        assert.ok(s.observationTimes.some(t => t < 2400));
+        assert.ok(s.observationTimes.every(t => t < 2400 || t >= 7200));
+        assert.ok(s.observationTimes.some(t => t >= 7200));
+        const transitions=s.events.filter(e=>e.type==='runtime_availability').map(e=>e.detail.waiting);
+        assert.deepEqual(transitions, [status,null]);
+        assert.deepEqual(s.state.commands, prior.commands);
+        assert.equal(s.state.stopReason, 'stop_file');
+    });
+}
+
+test('STOP remains effective while waiting for unlock', () => {
+    const h=host({keyguardLocked:[0,100000],stopAfterMs:2400}); h.run(); const s=h.snapshot();
+    assert.equal(s.now, 2400);
+    assert.equal(s.observationTimes.length, 0);
+    assert.equal(s.state.stopReason, 'stop_file');
+    assert.equal(h.disk.has(LOCK), false);
+});
+
+
+test('the watcher preserves the AutoX native runtime global used by selectors', () => {
+    const h=host({stopAfterMs:2400}); h.run();
+    assert.equal(h.snapshot().runtimeUnchanged, true);
+});
+
+
+function pageWaitHost(options={}) {
+    const h=host({...options,stop:true}); h.run(); h.disk.delete(STOP);
+    h.evaluate(`
+        device.height = 2600;
+        var testNode = {bounds:function(){return {width:function(){return 100;},height:function(){return 100;},top:100,bottom:200};}};
+        inputBox = function(){return testNode;};
+        id = function(){return {findOnce:function(){return testNode;}};};
+    `);
+    return h;
+}
+
+test('group transition waits beyond the previous fixed delay for title and controls to be ready', () => {
+    const h=pageWaitHost();
+    h.evaluate('groupOK=function(){return android.os.SystemClock.elapsedRealtime()>=2200;}; waitForChatReady();');
+    assert.equal(h.snapshot().now,2200);
+});
+
+test('group transition times out without retrying navigation when the target never becomes ready', () => {
+    const h=pageWaitHost();
+    assert.throws(()=>h.evaluate('groupOK=function(){return false;}; waitForChatReady();'),/8秒仍未就绪/);
+    assert.equal(h.snapshot().now,8000);
+});
+
+test('locking during a group transition stops before further UI work', () => {
+    const h=pageWaitHost({keyguardLocked:[1000,10000]});
+    assert.throws(()=>h.evaluate('groupOK=function(){return false;}; waitForChatReady();'),/waiting_for_unlock/);
+    assert.equal(h.snapshot().now,1000);
 });

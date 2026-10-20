@@ -20,6 +20,7 @@ var monoStarted = android.os.SystemClock.elapsedRealtime();
 var stateLoaded = false;
 var lastHealthLog = 0;
 var lastPower = "";
+var lastWaitReason = null;
 files.ensureDir(DIR);
 var lock = new java.io.File(BASE + "watch.lock");
 if (!lock.createNewFile()) throw new Error("Watcher lock exists; verify stopped before restarting");
@@ -28,7 +29,28 @@ var state = {group: "测试1", bot: "jarvis", status: "starting", sentThisRun: 0
     commands: {"001": {status: "recipient_confirmed_previous_one_shot"}}};
 var lastObservation = "";
 var lastHeartbeat = 0;
+function runtimeStatus() {
+    return {
+        screenInteractive: context.getSystemService("power").isInteractive(),
+        keyguardLocked: context.getSystemService("keyguard").isKeyguardLocked(),
+        touchExploration: context.getSystemService("accessibility").isTouchExplorationEnabled(),
+        enabledServices: String(android.provider.Settings.Secure.getString(context.getContentResolver(), "enabled_accessibility_services") || "")
+    };
+}
+function waitReason(status) {
+    if (!status.screenInteractive || status.keyguardLocked) return "waiting_for_unlock";
+    var services = status.enabledServices;
+    if (!status.touchExploration || services.indexOf("org.autojs.autoxjs.v7/") < 0 ||
+        (services.indexOf("local.wechat.accessibilityhelper/") < 0 && services.indexOf("com.bjbyhd.screenreader_huawei/") < 0)) return "waiting_for_accessibility";
+    return null;
+}
+function requireRuntimeReady() {
+    stopIfRequested();
+    var reason = waitReason(runtimeStatus());
+    if (reason) throw new Error("界面操作期间运行条件失效，已停止，请检查后重新开始：" + reason);
+}
 function health() {
+    var runtime = runtimeStatus();
     var b = context.registerReceiver(null, new android.content.IntentFilter("android.intent.action.BATTERY_CHANGED"));
     var u = context.registerReceiver(null, new android.content.IntentFilter("android.hardware.usb.action.USB_STATE"));
     return {batteryPercent: device.getBattery(), charging: device.isCharging(),
@@ -36,8 +58,8 @@ function health() {
         temperatureC: b ? b.getIntExtra("temperature", -1) / 10 : null,
         usbConnected: u ? u.getBooleanExtra("connected", false) : null,
         usbConfigured: u ? u.getBooleanExtra("configured", false) : null,
-        touchExploration: context.getSystemService("accessibility").isTouchExplorationEnabled(),
-        enabledServices: String(android.provider.Settings.Secure.getString(context.getContentResolver(), "enabled_accessibility_services") || ""),
+        screenInteractive: runtime.screenInteractive, keyguardLocked: runtime.keyguardLocked,
+        touchExploration: runtime.touchExploration, enabledServices: runtime.enabledServices,
         elapsedSeconds: Math.round((android.os.SystemClock.elapsedRealtime() - monoStarted) / 1000)};
 }
 function stopIfRequested() {
@@ -94,12 +116,27 @@ function observation() {
     var badge = row.findOne(id(PKG + ":id/o_u"));
     return {row: row, preview: String(preview ? preview.text() : ""), unread: String(badge ? badge.text() : "0")};
 }
+function waitForChatReady() {
+    var deadline = android.os.SystemClock.elapsedRealtime() + 8000;
+    while (android.os.SystemClock.elapsedRealtime() < deadline) {
+        requireRuntimeReady();
+        if (groupOK() && visible(inputBox()) && visible(id(PKG + ":id/bp0").findOnce())) return;
+        sleep(200);
+    }
+    throw new Error("进入测试群后8秒仍未就绪，已停止，请检查当前页面。");
+}
 function backToList() {
+    requireRuntimeReady();
     if (!groupOK()) throw new Error("Group changed before returning to list");
     var backButton = id(PKG + ":id/actionbar_up_indicator").findOnce();
     if (!visible(backButton) || !backButton.click()) throw new Error("Cannot return to list");
-    sleep(1000);
-    if (!observation()) throw new Error("Conversation list not confirmed");
+    var deadline = android.os.SystemClock.elapsedRealtime() + 8000;
+    while (android.os.SystemClock.elapsedRealtime() < deadline) {
+        requireRuntimeReady();
+        if (observation()) return;
+        sleep(200);
+    }
+    throw new Error("返回微信列表后8秒仍未就绪，已停止。");
 }
 function chatRows() {
     if (!groupOK()) throw new Error("测试群标题不匹配");
@@ -132,26 +169,38 @@ function rememberBoundary(rows) {
 }
 function prepareBoundary() {
     state.status="preparing"; persist();
-    var obs=observation();
-    if(!obs || obs.unread!=="0") throw new Error("开始前请先读完测试1旧消息，并返回聊天列表；当前未读不会自动清空。");
+    var deadline = android.os.SystemClock.elapsedRealtime() + 20000;
+    var obs = null;
+    while (android.os.SystemClock.elapsedRealtime() < deadline) {
+        stopIfRequested();
+        var waiting = waitReason(runtimeStatus());
+        if (!waiting) obs = observation();
+        if (obs) break;
+        if (state.status !== (waiting || "preparing")) { state.status = waiting || "preparing"; persist(); }
+        sleep(500);
+    }
+    if (!obs) throw new Error("等待20秒后仍未就绪，请解锁手机、检查控件辅助，并让测试1在微信列表中可见后重新开始。");
+    if(obs.unread!=="0") throw new Error("开始前请先读完测试1旧消息，并返回聊天列表；当前未读不会自动清空。");
     stopIfRequested();
     var fresh=observation();
     if(!fresh || fresh.unread!=="0" || fresh.preview!==obs.preview) throw new Error("准备期间来了新消息，请检查后重新启动。");
+    requireRuntimeReady();
     if(!fresh.row.click()) throw new Error("无法进入测试群记录边界");
-    sleep(900);
+    waitForChatReady();
     rememberBoundary(chatRows());
     backToList();
     event("baseline_recorded",{anchorRows:state.anchor.length});
     state.status="watching"; persist();
 }
 function processBatch(observed) {
-    stopIfRequested();
+    requireRuntimeReady();
     var fresh=observation();
     if(!fresh || fresh.preview!==observed.preview || fresh.unread!==observed.unread) return;
     if(!/^[1-5]$/.test(fresh.unread)) throw new Error("未读超过5条或数量不明确，已暂停，请人工检查测试群。");
     state.status="opening_group"; persist();
+    requireRuntimeReady();
     if(!fresh.row.click()) throw new Error("Could not open test group");
-    sleep(1200);
+    waitForChatReady();
     var rows=chatRows();
     var decision=policy.decide(fresh,rows,state.anchor,state.commands);
     event("batch_classified",{unread:fresh.unread,decision:decision});
@@ -171,18 +220,19 @@ function processBatch(observed) {
     if(!policy.sameRows(rows,chatRows())) throw new Error("检查期间消息发生变化，已暂停，未发送。");
     var input=inputBox();
     if(!visible(input) || String(input.text()||"")!=="") throw new Error("Chat input not empty");
-    stopIfRequested();
+    requireRuntimeReady();
     if(!input.setText(reply)) throw new Error("Cannot populate reply");
     sleep(500);
     input=inputBox();
     var send=packageName(PKG).text("发送").findOnce();
     if(!groupOK() || !visible(input) || String(input.text())!==reply || !visible(send)) throw new Error("Pre-send validation failed; inspect draft");
     if(!policy.sameRows(rows,chatRows())) throw new Error("发送前消息发生变化，已暂停，请检查输入框草稿。");
-    stopIfRequested();
+    requireRuntimeReady();
     // Persist before clicking; uncertain results are never retried automatically.
     state.commands[code]={status:"attempting",reply:reply,startedAt:new Date().toISOString(),unreadBatchSize:decision.batchSize};
     state.status="sending"; persist();
     event("send_attempt",{code:code,reply:reply,unreadBatchSize:decision.batchSize});
+    requireRuntimeReady();
     if(!send.click()) throw new Error("Send result uncertain; no retry");
     state.sentThisRun++;
     sleep(1600);
@@ -217,7 +267,13 @@ try {
     event("started", {maxMinutes: state.maxMinutes, maxSends: MAX_SENDS, health: state.health});
     prepareBoundary();
     while (android.os.SystemClock.elapsedRealtime() - monoStarted < MAX_MS && state.sentThisRun < MAX_SENDS && !files.exists(STOP)) {
-        var obs = observation();
+        var availability = runtimeStatus(), waiting = waitReason(availability);
+        if (waiting !== lastWaitReason) {
+            event("runtime_availability", {waiting: waiting, runtime: availability});
+            state.status = waiting || "watching"; persist();
+            lastWaitReason = waiting;
+        }
+        var obs = waiting ? null : observation();
         if (obs) {
             var key = obs.unread + "|" + obs.preview;
             if (key !== lastObservation) {
@@ -235,7 +291,7 @@ try {
                 lastHealthLog = Date.now();
                 lastPower = powerKey;
             }
-            state.status = files.exists(BASE + "TEST_HOLD") ? "test_hold" : obs ? "watching" : "waiting_for_test_group_list";
+            state.status = waiting || (files.exists(BASE + "TEST_HOLD") ? "test_hold" : obs ? "watching" : "waiting_for_test_group_list");
             persist();
             lastHeartbeat = Date.now();
         }
