@@ -20,12 +20,12 @@ ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<text id="nextText" text="下次发送：@jarvis 测试006" textSize="19sp" textColor="#163A31" marginBottom="16" />' +
     '<button id="startButton" text="开始测试（30分钟）" textSize="18sp" h="56" />' +
     '<button id="stopButton" text="停止回复" textSize="18sp" h="56" marginTop="8" />' +
-    '<text id="hintText" text="开始前：开启 AutoX 和“微信控件辅助”，保持微信聊天列表可见。每次使用新的测试编号。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
+    '<text id="hintText" text="开始前：开启 AutoX 和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再发送新编号。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
     '<button id="wechatButton" text="打开微信 / 返回等待" />' +
     '<button id="helperButton" text="打开微信控件辅助" />' +
     '<button id="settingsButton" text="打开无障碍设置" />' +
     '<button id="shortcutButton" text="添加桌面入口" />' +
-    '<text text="从成员列表选择 @jarvis，一次发一条。最多30分钟或10条回复后自动停止。查看本页时暂停识别，返回微信列表后继续。" textSize="13sp" textColor="#68776F" marginTop="16" />' +
+    '<text text="支持最多5条未读中只有一条 @ 的纯文字批次。多条 @ 或边界不明会暂停。最多30分钟或10条回复后自动停止。" textSize="13sp" textColor="#68776F" marginTop="16" />' +
     '</vertical></scroll>');
 function readState() {
     return files.exists(STATE) ? JSON.parse(files.read(STATE)) : {commands: {}, sentThisRun: 0};
@@ -45,7 +45,7 @@ function refresh() {
     try {
         var s = readState();
         var active = workers().length > 0;
-        var names = {watching: "正在等待群里的 @", opening_group: "正在进入测试群", sending: "正在回复", waiting_for_test_group_list: "等待返回微信聊天列表", stopped: "已停止", halted: "已停止，需要检查"};
+        var names = {test_hold: "等待本批测试消息发完", preparing: "正在记录消息边界，请稍候", watching: "正在等待群里的 @", opening_group: "正在进入测试群", sending: "正在回复", waiting_for_test_group_list: "等待返回微信聊天列表", stopped: "已停止", halted: "已停止，需要检查"};
         var label = active ? (files.exists(STOP) ? "正在停止，请稍候" : (names[s.status] || "正在启动")) : (s.status === "halted" ? names.halted : "已停止");
         var used = s.commands || {};
         var next = 6;
@@ -55,7 +55,21 @@ function refresh() {
         var detail = "本轮已回复 " + (s.sentThisRun || 0) + " 条";
         if (active && s.startedAt) detail += " · 运行约 " + Math.floor((Date.now() - Date.parse(s.startedAt)) / 60000) + " 分钟";
         if (active && age !== null && age > 45) detail += "\n状态超过45秒未更新，请先停止并检查";
-        if (s.error && s.status === "halted") detail += "\n" + s.error;
+        if (s.error && s.status === "halted") {
+            var errorText = String(s.error);
+            var explanations = {
+                mention_attribution_ambiguous: "这批中有多条 @ 或无法确认的 @，请人工查看测试1后再开始。",
+                baseline_not_unique_or_not_visible: "旧消息位置不在屏幕内或有重复，无法确认未读边界。请人工检查后再开始。",
+                unread_boundary_changed: "进入群时消息数量发生变化，已暂停。请人工检查后再开始。",
+                unsupported_or_hidden_message: "这批中含有图片、系统消息或未完整显示的消息，已暂停。",
+                last_message_does_not_match_preview: "最后一条消息与群列表摘要不一致，已暂停。"
+            };
+            Object.keys(explanations).some(function(key) {
+                if (errorText.indexOf(key) >= 0) { errorText = explanations[key]; return true; }
+                return false;
+            });
+            detail += "\n" + errorText;
+        }
         var enabled = services();
         detail += "\n控件辅助：" + (enabled.indexOf("local.wechat.accessibilityhelper/") >= 0 ? "已开启" : "未开启");
         detail += " · 触摸模式：" + (context.getSystemService("accessibility").isTouchExplorationEnabled() ? "已就绪" : "未就绪");

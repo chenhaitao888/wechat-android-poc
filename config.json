@@ -5,11 +5,13 @@
   "command_pattern": "@jarvis 测试NNN",
   "reply_template": "收到，测试NNN（自动回复测试）。",
   "enabled": false,
-  "final_status": "stopped",
+  "final_status": "halted_expected_ambiguity",
   "runtime_control": "Phone panel starts/stops watcher; run-request.json selects 30-minute mode; STOP disables startup and stops the loop; this manifest is informational",
   "max_run_minutes": 30,
   "max_replies_per_run": 10,
   "requires_native_screen_reader_on_test_device": false,
   "phone_entry": "微信群测试",
-  "requires_touch_exploration_provider": "local.wechat.accessibilityhelper or native screen reader fallback"
+  "requires_touch_exploration_provider": "local.wechat.accessibilityhelper or native screen reader fallback",
+  "max_unread_batch": 5,
+  "max_at_signs_per_batch": 1
 }

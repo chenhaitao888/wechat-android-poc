@@ -1,10 +1,11 @@
 // AutoX.js v7.2.4 / WeChat 8.0.79 / Huawei DCO-AL00 single-group PoC.
-// Only handles a single unread, explicitly mentioned 测试NNN command in 测试1.
+// Handles one attributable mention within 1–5 unread plain-text messages in 测试1.
 // No network calls, model, knowledge base, notification snooping, or other groups.
 auto.waitFor();
 var PKG = "com.tencent.mm";
 var BASE = "/sdcard/wechat-android-poc/";
 var DIR = BASE + "artifacts/";
+var policy = require(BASE + "mention-policy.js");
 var STATE = DIR + "watch-state.json";
 var LOG = DIR + "watch-events.jsonl";
 var STOP = BASE + "STOP";
@@ -100,51 +101,103 @@ function backToList() {
     sleep(1000);
     if (!observation()) throw new Error("Conversation list not confirmed");
 }
-function processCommand(code, observed) {
-    stopIfRequested();
-    var fresh = observation();
-    if (!fresh || fresh.preview !== observed.preview || fresh.unread !== "1") return;
-    event("mention_detected", {code: code, unread: fresh.unread, preview: fresh.preview});
-    state.status = "opening_group";
-    persist();
-    if (!fresh.row.click()) throw new Error("Could not open test group");
-    sleep(1200);
-    if (!groupOK()) throw new Error("Approved group title not confirmed");
-    if (!findMessage("@jarvis测试" + code, "incoming")) throw new Error("Incoming command not visible");
-    var reply = "收到，测试" + code + "（自动回复测试）。";
-    if (findMessage(reply, "outgoing")) {
-        state.commands[code] = {status: "existing_reply_observed", reply: reply};
-        persist();
-        backToList();
-        return;
+function chatRows() {
+    if (!groupOK()) throw new Error("测试群标题不匹配");
+    var list = id(PKG + ":id/bp0").findOnce();
+    if (!visible(list)) throw new Error("消息列表不可读");
+    var viewport=list.bounds(), rows=[];
+    for(var i=0;i<list.childCount();i++) {
+        var row=list.child(i), b=row.bounds();
+        if(b.height()<=0 || b.bottom<=viewport.top || b.top>=viewport.bottom) continue;
+        var bubbles=row.find(id(PKG+":id/bkl"));
+        var avatars=row.find(id(PKG+":id/bk1"));
+        var sender=row.findOne(id(PKG+":id/brc"));
+        var texts=row.find(className("android.widget.TextView"));
+        var plain=String(row.id())===PKG+":id/bn1" && bubbles.size()===1 && avatars.size()===1;
+        for(var t=0;t<texts.size();t++) {
+            var tid=String(texts.get(t).id());
+            if(tid!==PKG+":id/bkl" && tid!==PKG+":id/brc" && tid!==PKG+":id/br1") plain=false;
+        }
+        var avatar=avatars.size()===1 ? avatars.get(0) : null;
+        var direction=avatar ? (avatar.bounds().right<device.width/2 ? "incoming" : avatar.bounds().left>device.width/2 ? "outgoing" : "unknown") : "unknown";
+        rows.push({text:bubbles.size()===1 ? String(bubbles.get(0).text()||"") : "",sender:sender ? String(sender.text()||"") : "",direction:direction,simpleText:plain,fullyVisible:b.top>=viewport.top && b.bottom<=viewport.bottom});
     }
-    var input = inputBox();
-    if (!visible(input) || String(input.text() || "") !== "") throw new Error("Chat input not empty");
-    stopIfRequested();
-    if (!input.setText(reply)) throw new Error("Cannot populate reply");
-    sleep(500);
-    input = inputBox();
-    var send = packageName(PKG).text("发送").findOnce();
-    if (!groupOK() || !visible(input) || String(input.text()) !== reply || !visible(send)) throw new Error("Pre-send validation failed; inspect draft");
-    stopIfRequested();
-    // Persist before clicking. A crash or ambiguous result never causes automatic retransmission.
-    state.commands[code] = {status: "attempting", reply: reply, startedAt: new Date().toISOString()};
-    state.status = "sending";
-    persist();
-    event("send_attempt", {code: code, reply: reply});
-    if (!send.click()) throw new Error("Send result uncertain; no retry");
-    state.sentThisRun++;
-    sleep(1600);
-    var sent = groupOK() && findMessage(reply, "outgoing");
-    state.commands[code].status = sent ? "outgoing_bubble_observed" : "uncertain";
-    state.commands[code].finishedAt = new Date().toISOString();
-    persist();
-    event(state.commands[code].status, {code: code});
-    if (!sent) throw new Error("Outgoing bubble not confirmed; no retry");
-    backToList();
-    state.status = "watching";
+    return rows;
+}
+function rememberBoundary(rows) {
+    var anchor=rows.slice(-2);
+    if(!anchor.length || anchor.some(function(r){return !r.simpleText || !r.text;})) throw new Error("无法记录纯文字消息边界");
+    state.anchor=anchor;
     persist();
 }
+function prepareBoundary() {
+    state.status="preparing"; persist();
+    var obs=observation();
+    if(!obs || obs.unread!=="0") throw new Error("开始前请先读完测试1旧消息，并返回聊天列表；当前未读不会自动清空。");
+    stopIfRequested();
+    var fresh=observation();
+    if(!fresh || fresh.unread!=="0" || fresh.preview!==obs.preview) throw new Error("准备期间来了新消息，请检查后重新启动。");
+    if(!fresh.row.click()) throw new Error("无法进入测试群记录边界");
+    sleep(900);
+    rememberBoundary(chatRows());
+    backToList();
+    event("baseline_recorded",{anchorRows:state.anchor.length});
+    state.status="watching"; persist();
+}
+function processBatch(observed) {
+    stopIfRequested();
+    var fresh=observation();
+    if(!fresh || fresh.preview!==observed.preview || fresh.unread!==observed.unread) return;
+    if(!/^[1-5]$/.test(fresh.unread)) throw new Error("未读超过5条或数量不明确，已暂停，请人工检查测试群。");
+    state.status="opening_group"; persist();
+    if(!fresh.row.click()) throw new Error("Could not open test group");
+    sleep(1200);
+    var rows=chatRows();
+    var decision=policy.decide(fresh,rows,state.anchor,state.commands);
+    event("batch_classified",{unread:fresh.unread,decision:decision});
+    if(decision.kind==="pause") {
+        files.write(DIR+"pending-batch.json",JSON.stringify({time:new Date().toISOString(),observation:{preview:fresh.preview,unread:fresh.unread},anchor:state.anchor,rows:rows,reason:decision.reason},null,2));
+        throw new Error("这批消息无法准确归属 @，已暂停并保留记录："+decision.reason);
+    }
+    if(decision.kind!=="reply") { rememberBoundary(rows); backToList(); return; }
+    var code=decision.code;
+    if(!findMessage("@jarvis测试"+code,"incoming")) throw new Error("Incoming command not visible");
+    var reply="收到，测试"+code+"（自动回复测试）。";
+    if(findMessage(reply,"outgoing")) {
+        state.commands[code]={status:"existing_reply_observed",reply:reply};
+        rememberBoundary(rows); backToList(); return;
+    }
+    sleep(350);
+    if(!policy.sameRows(rows,chatRows())) throw new Error("检查期间消息发生变化，已暂停，未发送。");
+    var input=inputBox();
+    if(!visible(input) || String(input.text()||"")!=="") throw new Error("Chat input not empty");
+    stopIfRequested();
+    if(!input.setText(reply)) throw new Error("Cannot populate reply");
+    sleep(500);
+    input=inputBox();
+    var send=packageName(PKG).text("发送").findOnce();
+    if(!groupOK() || !visible(input) || String(input.text())!==reply || !visible(send)) throw new Error("Pre-send validation failed; inspect draft");
+    if(!policy.sameRows(rows,chatRows())) throw new Error("发送前消息发生变化，已暂停，请检查输入框草稿。");
+    stopIfRequested();
+    // Persist before clicking; uncertain results are never retried automatically.
+    state.commands[code]={status:"attempting",reply:reply,startedAt:new Date().toISOString(),unreadBatchSize:decision.batchSize};
+    state.status="sending"; persist();
+    event("send_attempt",{code:code,reply:reply,unreadBatchSize:decision.batchSize});
+    if(!send.click()) throw new Error("Send result uncertain; no retry");
+    state.sentThisRun++;
+    sleep(1600);
+    var sent=groupOK() && findMessage(reply,"outgoing");
+    state.commands[code].status=sent ? "outgoing_bubble_observed" : "uncertain";
+    state.commands[code].finishedAt=new Date().toISOString();
+    persist(); event(state.commands[code].status,{code:code});
+    if(!sent) throw new Error("Outgoing bubble not confirmed; no retry");
+    var after=chatRows(),last=after[after.length-1];
+    if(!last || last.direction!=="outgoing" || last.text!==reply) throw new Error("回复后又有新消息，已暂停，请检查测试群。");
+    rememberBoundary(after);
+    backToList();
+    state.status="watching"; persist();
+}
+
 try {
     if (files.exists(STATE)) {
         var previous = JSON.parse(files.read(STATE));
@@ -162,6 +215,7 @@ try {
     state.health = health();
     persist();
     event("started", {maxMinutes: state.maxMinutes, maxSends: MAX_SENDS, health: state.health});
+    prepareBoundary();
     while (android.os.SystemClock.elapsedRealtime() - monoStarted < MAX_MS && state.sentThisRun < MAX_SENDS && !files.exists(STOP)) {
         var obs = observation();
         if (obs) {
@@ -170,8 +224,8 @@ try {
                 event("list_observation", {unread: obs.unread, preview: obs.preview});
                 lastObservation = key;
             }
-            var match = /^\[有人@我\]\s+.+:\s*@jarvis[\s\u2005\u200b]*测试(\d{3})$/.exec(obs.preview);
-            if (match && obs.unread === "1" && !state.commands[match[1]]) processCommand(match[1], obs);
+            // Development-only gate makes unread batches reproducible on the device.
+            if (!files.exists(BASE + "TEST_HOLD") && /^\[有人@我\]/.test(obs.preview)) processBatch(obs);
         }
         if (Date.now() - lastHeartbeat > 15000) {
             state.health = health();
@@ -181,7 +235,7 @@ try {
                 lastHealthLog = Date.now();
                 lastPower = powerKey;
             }
-            state.status = obs ? "watching" : "waiting_for_test_group_list";
+            state.status = files.exists(BASE + "TEST_HOLD") ? "test_hold" : obs ? "watching" : "waiting_for_test_group_list";
             persist();
             lastHeartbeat = Date.now();
         }

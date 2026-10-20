@@ -21,3 +21,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+/TEST_HOLD
+/inspection-label.txt
+/test-action.txt
