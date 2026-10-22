@@ -5,7 +5,7 @@
   "command_pattern": "@jarvis 测试NNN",
   "reply_template": "收到，测试NNN（自动回复测试）。",
   "enabled": false,
-  "final_status": "stopped_after_process_and_reboot_recovery_test",
+  "final_status": "stopped_after_background_settings_and_30_minute_standalone_test",
   "runtime_control": "Phone panel starts/stops watcher; run-request.json selects 30-minute mode; STOP disables startup and stops the loop; this manifest is informational",
   "max_run_minutes": 30,
   "max_replies_per_run": 10,
@@ -13,5 +13,7 @@
   "phone_entry": "微信群测试",
   "requires_touch_exploration_provider": "local.wechat.accessibilityhelper or native screen reader fallback",
   "max_unread_batch": 5,
-  "max_at_signs_per_batch": 1
+  "max_at_signs_per_batch": 1,
+  "requires_autox_foreground_service": true,
+  "huawei_background_setup": "Manual launch management: allow background activity; battery optimization exemption"
 }

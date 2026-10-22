@@ -27,7 +27,7 @@ if (action === "prepare") {
     if (!box || String(box.text() || "") !== "") throw new Error("Input contains a draft; no changes made");
     if (!id("com.tencent.mm:id/actionbar_up_indicator").findOnce().click()) throw new Error("Cannot return to list");
     sleep(800);
-    engines.execScriptFile(BASE + "phone-panel.js");
+    engines.execScriptFile(BASE + "open-phone-panel.js");
 } else if (action === "start" || action === "stop" || action === "wechat" || action === "recover") {
     var heading = packageName("org.autojs.autoxjs.v7").text("微信群测试").findOnce();
     if (!heading) throw new Error("Test panel not foreground");

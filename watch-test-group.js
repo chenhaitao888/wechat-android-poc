@@ -7,6 +7,7 @@ var BASE = "/sdcard/wechat-android-poc/";
 var DIR = BASE + "artifacts/";
 var policy = require(BASE + "mention-policy.js");
 var runRecovery = require(BASE + "run-recovery.js");
+var foregroundService = require(BASE + "foreground-service.js");
 var STATE = DIR + "watch-state.json";
 var LOG = DIR + "watch-events.jsonl";
 var STOP = BASE + "STOP";
@@ -35,6 +36,8 @@ function runtimeStatus() {
         screenInteractive: context.getSystemService("power").isInteractive(),
         keyguardLocked: context.getSystemService("keyguard").isKeyguardLocked(),
         touchExploration: context.getSystemService("accessibility").isTouchExplorationEnabled(),
+        foregroundServiceRunning: foregroundService.isRunning(),
+        batteryOptimizationIgnored: foregroundService.isBatteryOptimizationIgnored(),
         enabledServices: String(android.provider.Settings.Secure.getString(context.getContentResolver(), "enabled_accessibility_services") || "")
     };
 }
@@ -43,6 +46,7 @@ function waitReason(status) {
     var services = status.enabledServices;
     if (!status.touchExploration || services.indexOf("org.autojs.autoxjs.v7/") < 0 ||
         (services.indexOf("local.wechat.accessibilityhelper/") < 0 && services.indexOf("com.bjbyhd.screenreader_huawei/") < 0)) return "waiting_for_accessibility";
+    if (status.foregroundServiceRunning !== true) return "waiting_for_foreground_service";
     return null;
 }
 function requireRuntimeReady() {
@@ -60,11 +64,18 @@ function health() {
         usbConnected: u ? u.getBooleanExtra("connected", false) : null,
         usbConfigured: u ? u.getBooleanExtra("configured", false) : null,
         screenInteractive: runtime.screenInteractive, keyguardLocked: runtime.keyguardLocked,
-        touchExploration: runtime.touchExploration, enabledServices: runtime.enabledServices,
+        touchExploration: runtime.touchExploration, foregroundServiceRunning: runtime.foregroundServiceRunning,
+        batteryOptimizationIgnored: runtime.batteryOptimizationIgnored, enabledServices: runtime.enabledServices,
         elapsedSeconds: Math.round((android.os.SystemClock.elapsedRealtime() - monoStarted) / 1000)};
 }
 function stopIfRequested() {
     if (files.exists(STOP)) throw new Error("User requested stop");
+    // A suspended process can resume after the run deadline while inside a batch.
+    if (android.os.SystemClock.elapsedRealtime() - monoStarted >= MAX_MS) {
+        var expired = new Error("Run time limit reached");
+        expired.stopReason = "time_limit";
+        throw expired;
+    }
 }
 function persist() {
     state.updatedAt = new Date().toISOString();
@@ -104,17 +115,48 @@ function findMessage(value, side) {
     return null;
 }
 function inputBox() { return id(PKG + ":id/bkk").className("android.widget.EditText").findOnce(); }
+var lastListDiagnostic = "";
+function recordListDiagnostic(reason, detail) {
+    var result = detail || {};
+    result.reason = reason;
+    var key = JSON.stringify(result);
+    if (key === lastListDiagnostic) return;
+    lastListDiagnostic = key;
+    // Read only root metadata, never other conversations or notification text.
+    if (reason !== "ready") {
+        var root = null;
+        try {
+            root = auto.service.getRootInActiveWindow();
+            result.rootPackage = root ? String(root.getPackageName() || "") : null;
+            result.rootChildren = root ? root.getChildCount() : null;
+        } catch (e) { result.rootInspectionFailed = true; }
+        finally { if (root) root.recycle(); }
+    }
+    state.listDiagnostic = result;
+    event("list_visibility", result);
+}
 function observation() {
     // Visible group-chat title means we are not on the conversation list.
-    if (visible(id(PKG + ":id/obn").findOnce())) return null;
+    var title = id(PKG + ":id/obn").findOnce();
+    if (visible(title)) {
+        recordListDiagnostic("chat_title_visible", {approvedGroup: /^测试1\(\d+\)$/.test(String(title.text()))});
+        return null;
+    }
     var names = id(PKG + ":id/kbq").text("测试1").find();
     var found = [];
     for (var i = 0; i < names.size(); i++) if (visible(names.get(i))) found.push(names.get(i));
-    if (found.length !== 1) return null;
+    if (found.length !== 1) {
+        recordListDiagnostic("group_not_unique_or_visible", {matchingNames:names.size(), visibleNames:found.length});
+        return null;
+    }
     var row = ancestor(found[0], "cj1");
-    if (!visible(row)) return null;
+    if (!visible(row)) {
+        recordListDiagnostic("group_row_not_visible", {rowFound:!!row});
+        return null;
+    }
     var preview = row.findOne(id(PKG + ":id/ht5"));
     var badge = row.findOne(id(PKG + ":id/o_u"));
+    recordListDiagnostic("ready");
     return {row: row, preview: String(preview ? preview.text() : ""), unread: String(badge ? badge.text() : "0")};
 }
 function waitForChatReady() {
@@ -125,6 +167,22 @@ function waitForChatReady() {
         sleep(200);
     }
     throw new Error("进入测试群后8秒仍未就绪，已停止，请检查当前页面。");
+}
+function waitForSendReady(reply) {
+    var deadline = android.os.SystemClock.elapsedRealtime() + 4000;
+    var detail = {};
+    while (android.os.SystemClock.elapsedRealtime() < deadline) {
+        requireRuntimeReady();
+        var input = inputBox();
+        var send = packageName(PKG).text("发送").findOnce();
+        detail = {groupValid:groupOK(), inputVisible:visible(input),
+            draftMatches:!!input && String(input.text() || "") === reply,
+            sendVisible:visible(send), sendEnabled:!!send && send.enabled()};
+        if (detail.groupValid && detail.inputVisible && detail.draftMatches && detail.sendVisible && detail.sendEnabled) return send;
+        sleep(200);
+    }
+    event("send_readiness_timeout", detail);
+    throw new Error("填写回复后4秒内发送条件仍未就绪，已停止，请检查输入框草稿。");
 }
 function backToList() {
     requireRuntimeReady();
@@ -223,10 +281,7 @@ function processBatch(observed) {
     if(!visible(input) || String(input.text()||"")!=="") throw new Error("Chat input not empty");
     requireRuntimeReady();
     if(!input.setText(reply)) throw new Error("Cannot populate reply");
-    sleep(500);
-    input=inputBox();
-    var send=packageName(PKG).text("发送").findOnce();
-    if(!groupOK() || !visible(input) || String(input.text())!==reply || !visible(send)) throw new Error("Pre-send validation failed; inspect draft");
+    var send=waitForSendReady(reply);
     if(!policy.sameRows(rows,chatRows())) throw new Error("发送前消息发生变化，已暂停，请检查输入框草稿。");
     requireRuntimeReady();
     // Persist before clicking; uncertain results are never retried automatically.
@@ -304,12 +359,12 @@ try {
     persist();
     event("stopped", {reason: state.stopReason});
 } catch (e) {
-    state.status = files.exists(STOP) ? "stopped" : "halted";
+    state.status = files.exists(STOP) || e.stopReason === "time_limit" ? "stopped" : "halted";
     state.error = String(e);
-    if (state.status === "stopped") state.stopReason = "stop_file";
+    if (state.status === "stopped") state.stopReason = files.exists(STOP) ? "stop_file" : "time_limit";
     if (stateLoaded) persist();
     else files.write(DIR + "last-start-error.json", JSON.stringify({time: new Date().toISOString(), error: String(e)}));
-    event(state.status, {error: String(e)});
+    event(state.status, {error: String(e), reason: state.stopReason || null});
     console.error(e);
 } finally {
     device.cancelKeepingAwake();

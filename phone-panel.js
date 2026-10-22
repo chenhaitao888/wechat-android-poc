@@ -5,6 +5,7 @@ var STATE = BASE + "artifacts/watch-state.json";
 var STOP = BASE + "STOP";
 var WORKER = BASE + "watch-test-group.js";
 var runRecovery = require(BASE + "run-recovery.js");
+var foregroundService = require(BASE + "foreground-service.js");
 var recoveryController = runRecovery.createController(BASE, function() { return workers().length; });
 var busy = false;
 // Reopening the desktop entry replaces only older copies of this panel.
@@ -23,7 +24,7 @@ ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<button id="startButton" text="开始测试（30分钟）" textSize="18sp" h="56" />' +
     '<button id="stopButton" text="停止回复" textSize="18sp" h="56" marginTop="8" />' +
     '<button id="recoverButton" text="检查并恢复" textSize="18sp" h="56" marginTop="8" visibility="gone" />' +
-    '<text id="hintText" text="开始前：开启 AutoX 和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再发送新编号。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
+    '<text id="hintText" text="开始前：开启 AutoX 前台服务、无障碍和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再发送新编号。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
     '<button id="wechatButton" text="打开微信 / 返回等待" />' +
     '<button id="helperButton" text="打开微信控件辅助" />' +
     '<button id="settingsButton" text="打开无障碍设置" />' +
@@ -50,7 +51,7 @@ function refresh() {
         var active = workers().length > 0;
         var orphaned = !active && files.exists(BASE + "watch.lock");
         var recoveryCheck = orphaned ? recoveryController.inspect() : {recoverable:false};
-        var names = {test_hold: "等待本批测试消息发完", preparing: "正在记录消息边界，请稍候", watching: "正在等待群里的 @", opening_group: "正在进入测试群", sending: "正在回复", waiting_for_test_group_list: "等待返回微信聊天列表", waiting_for_unlock: "等待手机亮屏并解锁", waiting_for_accessibility: "等待控件辅助恢复", stopped: "已停止", halted: "已停止，需要检查"};
+        var names = {test_hold: "等待本批测试消息发完", preparing: "正在记录消息边界，请稍候", watching: "正在等待群里的 @", opening_group: "正在进入测试群", sending: "正在回复", waiting_for_test_group_list: "等待返回微信聊天列表", waiting_for_unlock: "等待手机亮屏并解锁", waiting_for_accessibility: "等待控件辅助恢复", waiting_for_foreground_service: "等待前台运行服务恢复", stopped: "已停止", halted: "已停止，需要检查"};
         var label = active ? (files.exists(STOP) ? "正在停止，请稍候" : (names[s.status] || "正在启动")) : (s.status === "halted" ? names.halted : "已停止");
         if (orphaned) label = "上次任务未正常结束";
         var used = s.commands || {};
@@ -79,6 +80,10 @@ function refresh() {
         if (orphaned) detail += recoveryCheck.recoverable ? "\n已确认旧任务退出。请先检查群内消息，再点“检查并恢复”。" : "\n暂时无法确认旧任务已退出，请先停止；仍无法恢复时需要维护检查。";
         if (!active && s.recoveredAt) detail += "\n已恢复停止状态。历史编号已保留，检查旧消息后可重新开始。";
         var enabled = services();
+        var foreground = foregroundService.isRunning();
+        detail += "\n前台运行：" + (foreground === true ? "已开启" : foreground === false ? "未开启，请在AutoX菜单开启前台服务" : "暂时无法确认");
+        var exempt = foregroundService.isBatteryOptimizationIgnored();
+        detail += "\n电池优化：" + (exempt === true ? "已豁免" : exempt === false ? "未豁免，请按部署说明设置" : "暂时无法确认");
         detail += "\nAutoX服务：" + (enabled.indexOf("org.autojs.autoxjs.v7/") >= 0 ? "已开启" : "未开启，请先在无障碍设置中开启");
         detail += "\n控件辅助：" + (enabled.indexOf("local.wechat.accessibilityhelper/") >= 0 ? "已开启" : "未开启");
         detail += " · 触摸模式：" + (context.getSystemService("accessibility").isTouchExplorationEnabled() ? "已就绪" : "未就绪");
@@ -98,6 +103,7 @@ ui.startButton.on("click", function() {
     busy = true;
     try {
         if (workers().length || files.exists(BASE + "watch.lock")) throw new Error("上一次任务还未退出，请先停止。异常残留需要检查，不能直接重复启动。");
+        if (foregroundService.isRunning() !== true) throw new Error("请先打开 AutoX 左侧菜单，开启“前台服务”，再返回本面板开始。");
         var enabled = services();
         if (enabled.indexOf("org.autojs.autoxjs.v7/") < 0) throw new Error("请先在无障碍设置中开启 AutoX 服务。");
         var helper = enabled.indexOf("local.wechat.accessibilityhelper/") >= 0;
@@ -139,7 +145,7 @@ ui.shortcutButton.on("click", function() {
         if (!manager || !manager.isRequestPinShortcutSupported()) throw new Error("当前桌面不支持快捷方式，请从 AutoX 打开本脚本。");
         var intent = new android.content.Intent(android.content.Intent.ACTION_VIEW);
         intent.setClassName(context.getPackageName(), "org.autojs.autojs.external.open.RunIntentActivity");
-        intent.setData(android.net.Uri.parse("file://" + BASE + "phone-panel.js"));
+        intent.setData(android.net.Uri.parse("file://" + BASE + "open-phone-panel.js"));
         var shortcut = new android.content.pm.ShortcutInfo.Builder(context, "wechat-test-panel")
             .setShortLabel("微信群测试").setLongLabel("微信群测试控制台")
             .setIcon(android.graphics.drawable.Icon.createWithResource(context, android.R.drawable.ic_menu_send))

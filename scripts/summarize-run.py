@@ -42,6 +42,8 @@ def summarize(state, events):
         "sendCounts":dict(sends), "observedBubbleCounts":dict(bubbles), "stateSendCount":state["sentThisRun"],
         "healthSamples":len(samples),
         "usbDisconnectedSamples":sum(s["health"].get("usbConnected") is False and s["health"].get("usbConfigured") is False for s in samples),
+        "foregroundServiceSamples":sum(s["health"].get("foregroundServiceRunning") is True for s in samples),
+        "batteryOptimizationExemptSamples":sum(s["health"].get("batteryOptimizationIgnored") is True for s in samples),
         "touchExplorationEnabledSamples":sum(s["health"].get("touchExploration") is True for s in samples),
         "helperEnabledSamples":sum("local.wechat.accessibilityhelper/" in s["health"].get("enabledServices", "") for s in samples),
         "accessibilityStateKnownSamples":sum(isinstance(s["health"].get("enabledServices"), str) for s in samples),
@@ -65,6 +67,8 @@ def main():
     parser.add_argument("--max-health-gap-seconds", type=float, default=90)
     parser.add_argument("--fully-disconnected", action="store_true")
     parser.add_argument("--require-helper", action="store_true")
+    parser.add_argument("--require-foreground-service", action="store_true")
+    parser.add_argument("--require-battery-exemption", action="store_true")
     parser.add_argument("--output", help="JSON filename written only under the local artifacts directory")
     args = parser.parse_args()
     if not all(re.fullmatch(r"[0-9]{3}", code) for code in args.expected_codes) or len(set(args.expected_codes)) != len(args.expected_codes):
@@ -92,6 +96,10 @@ def main():
         checks["helper_all_samples"] = result["helperEnabledSamples"] == result["healthSamples"]
         checks["touch_mode_all_samples"] = result["touchExplorationEnabledSamples"] == result["healthSamples"]
         checks["native_reader_off"] = result["accessibilityStateKnownSamples"] == result["healthSamples"] and result["nativeReaderEnabledSamples"] == 0
+    if args.require_foreground_service:
+        checks["foreground_service_all_samples"] = result["foregroundServiceSamples"] == result["healthSamples"]
+    if args.require_battery_exemption:
+        checks["battery_exemption_all_samples"] = result["batteryOptimizationExemptSamples"] == result["healthSamples"]
     result["checks"] = checks
     result["passed"] = all(checks.values())
     result["deliveryConfirmation"] = "Requires separate recipient confirmation; outgoing bubbles alone do not prove delivery."

@@ -54,6 +54,7 @@ function host(options = {}) {
             ensureDir: () => {},
         },
         require: name => {
+            if (name === BASE + 'foreground-service.js') return {isRunning:() => !inWindow(options.foregroundUnavailable),isBatteryOptimizationIgnored:() => true};
             if (name === BASE + 'run-recovery.js') return {makeOwner:() => ({version:1,pid:101,uid:10001,bootCount:7,packageName:'org.autojs.autoxjs.v7',processName:'org.autojs.autoxjs.v7:script',processStartedElapsedMs:100})};
             assert.equal(name, BASE + 'mention-policy.js'); return policy;
         },
@@ -248,4 +249,65 @@ test('locking during a group transition stops before further UI work', () => {
     const h=pageWaitHost({keyguardLocked:[1000,10000]});
     assert.throws(()=>h.evaluate('groupOK=function(){return false;}; waitForChatReady();'),/waiting_for_unlock/);
     assert.equal(h.snapshot().now,1000);
+});
+
+
+test('startup without foreground service waits then stops without reading or clicking WeChat', () => {
+    const h=host({realPreparation:true,foregroundUnavailable:[0,30000]});h.run();const s=h.snapshot();
+    assert.equal(s.state.status,'halted');assert.equal(s.uiCalls,0);assert.equal(s.rowClicks,0);
+    assert.equal(s.observationTimes.length,0);assert.deepEqual(s.state.commands,prior.commands);
+});
+test('a lost foreground service suspends UI polling until restored within the same run', () => {
+    const h=host({foregroundUnavailable:[2400,7200],stopAfterMs:9600});h.run();const s=h.snapshot();
+    assert.ok(s.observationTimes.some(t=>t<2400));assert.ok(s.observationTimes.every(t=>t<2400||t>=7200));
+    assert.ok(s.observationTimes.some(t=>t>=7200));
+    assert.ok(s.events.some(e=>e.type==='runtime_availability'&&e.detail.waiting==='waiting_for_foreground_service'));
+    assert.deepEqual(s.state.commands,prior.commands);
+});
+function sendReadyHost(options={}) {
+    const h=pageWaitHost(options);
+    h.evaluate(`
+        var draft='expected reply',sendReadyAt=1800,sendClicks=0,draftWrites=0;
+        testNode.text=function(){return draft;};
+        testNode.setText=function(){draftWrites++;};
+        var sendNode={bounds:testNode.bounds,enabled:function(){return true;},click:function(){sendClicks++;}};
+        groupOK=function(){return true;};
+        packageName=function(){return {text:function(){return {findOnce:function(){return android.os.SystemClock.elapsedRealtime()>=sendReadyAt?sendNode:null;}};}};};
+    `);
+    return h;
+}
+test('delayed send controls are awaited without retyping or clicking', () => {
+    const h=sendReadyHost();h.evaluate('waitForSendReady("expected reply");');
+    assert.equal(h.snapshot().now,1800);assert.equal(h.evaluate('sendClicks+draftWrites'),0);
+});
+test('send readiness timeout preserves an altered draft and never clicks', () => {
+    const h=sendReadyHost();h.evaluate('draft="changed by user";sendReadyAt=0;');
+    assert.throws(()=>h.evaluate('waitForSendReady("expected reply");'),/4秒内/);
+    assert.equal(h.snapshot().now,4000);assert.equal(h.evaluate('draft'), 'changed by user');
+    assert.equal(h.evaluate('sendClicks+draftWrites'),0);
+    assert.equal(h.snapshot().events.at(-1).detail.draftMatches,false);
+});
+test('lock or foreground loss during send readiness stops before any send action', () => {
+    for(const condition of ['keyguardLocked','foregroundUnavailable']) {
+        const h=sendReadyHost({[condition]:[1000,10000]});
+        assert.throws(()=>h.evaluate('waitForSendReady("expected reply");'),/运行条件失效/);
+        assert.equal(h.snapshot().now,1000);assert.equal(h.evaluate('sendClicks+draftWrites'),0);
+    }
+});
+
+
+test('resuming inside a UI operation after the deadline stops before reading or clicking', () => {
+    const h=sendReadyHost();
+    h.evaluate('sleep(30*60*1000);');
+    assert.throws(()=>h.evaluate('waitForSendReady("expected reply");'),/Run time limit reached/);
+    assert.equal(h.evaluate('sendClicks+draftWrites'),0);
+});
+test('deadline reached inside a batch is recorded as a timed stop and releases the lock', () => {
+    const h=host({minutes:30});
+    h.evaluate('var originalAutoWait=auto.waitFor; auto.waitFor=function(){originalAutoWait(); processBatch=function(){sleep(30*60*1000);requireRuntimeReady();}; observation=function(){return {preview:"[有人@我] test",unread:"1"};};};');
+    h.run();const s=h.snapshot();
+    assert.equal(s.state.status,'stopped');assert.equal(s.state.stopReason,'time_limit');
+    assert.equal(s.events.at(-1).detail.reason,'time_limit');assert.equal(h.disk.has(LOCK),false);
+    assert.deepEqual(s.state.commands,prior.commands);
+    assert.equal(s.events.filter(e=>e.type==='send_attempt').length,0);
 });
