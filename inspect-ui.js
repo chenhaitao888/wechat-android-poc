@@ -13,7 +13,7 @@ var report = {time: new Date().toISOString(), touchExploration: manager.isTouchE
         var t = String(n.text() || ""), nodeId = String(n.id() || "");
         // Never retain other WeChat conversation previews or message contents.
         if(pkg === "com.tencent.mm" && !(t === "测试1" || /^测试1\(\d+\)$/.test(t))) continue;
-        if(t || nodeId.indexOf("switch") >= 0) item.controls.push({text: t, id: nodeId, bounds: [b.left,b.top,b.right,b.bottom], checked: n.checked(), clickable: n.clickable()});
+        if(t || nodeId.indexOf("switch") >= 0) item.controls.push({text: t, id: nodeId, bounds: [b.left,b.top,b.right,b.bottom], checked: n.checked(), clickable: n.clickable(), enabled: n.enabled()});
     }
     report.packages[pkg] = item;
 });

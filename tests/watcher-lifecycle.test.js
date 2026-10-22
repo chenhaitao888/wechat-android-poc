@@ -53,7 +53,10 @@ function host(options = {}) {
             append: (name, data) => disk.set(name, (disk.get(name) || '') + data),
             ensureDir: () => {},
         },
-        require: name => { assert.equal(name, BASE + 'mention-policy.js'); return policy; },
+        require: name => {
+            if (name === BASE + 'run-recovery.js') return {makeOwner:() => ({version:1,pid:101,uid:10001,bootCount:7,packageName:'org.autojs.autoxjs.v7',processName:'org.autojs.autoxjs.v7:script',processStartedElapsedMs:100})};
+            assert.equal(name, BASE + 'mention-policy.js'); return policy;
+        },
         java: {io:{File}},
         android: {
             os:{SystemClock:{elapsedRealtime:() => now}},

@@ -4,6 +4,8 @@ var BASE = "/sdcard/wechat-android-poc/";
 var STATE = BASE + "artifacts/watch-state.json";
 var STOP = BASE + "STOP";
 var WORKER = BASE + "watch-test-group.js";
+var runRecovery = require(BASE + "run-recovery.js");
+var recoveryController = runRecovery.createController(BASE, function() { return workers().length; });
 var busy = false;
 // Reopening the desktop entry replaces only older copies of this panel.
 var ownEngine = engines.myEngine();
@@ -20,6 +22,7 @@ ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<text id="nextText" text="下次发送：@jarvis 测试006" textSize="19sp" textColor="#163A31" marginBottom="16" />' +
     '<button id="startButton" text="开始测试（30分钟）" textSize="18sp" h="56" />' +
     '<button id="stopButton" text="停止回复" textSize="18sp" h="56" marginTop="8" />' +
+    '<button id="recoverButton" text="检查并恢复" textSize="18sp" h="56" marginTop="8" visibility="gone" />' +
     '<text id="hintText" text="开始前：开启 AutoX 和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再发送新编号。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
     '<button id="wechatButton" text="打开微信 / 返回等待" />' +
     '<button id="helperButton" text="打开微信控件辅助" />' +
@@ -45,8 +48,11 @@ function refresh() {
     try {
         var s = readState();
         var active = workers().length > 0;
+        var orphaned = !active && files.exists(BASE + "watch.lock");
+        var recoveryCheck = orphaned ? recoveryController.inspect() : {recoverable:false};
         var names = {test_hold: "等待本批测试消息发完", preparing: "正在记录消息边界，请稍候", watching: "正在等待群里的 @", opening_group: "正在进入测试群", sending: "正在回复", waiting_for_test_group_list: "等待返回微信聊天列表", waiting_for_unlock: "等待手机亮屏并解锁", waiting_for_accessibility: "等待控件辅助恢复", stopped: "已停止", halted: "已停止，需要检查"};
         var label = active ? (files.exists(STOP) ? "正在停止，请稍候" : (names[s.status] || "正在启动")) : (s.status === "halted" ? names.halted : "已停止");
+        if (orphaned) label = "上次任务未正常结束";
         var used = s.commands || {};
         var next = 6;
         Object.keys(used).forEach(function(k) { next = Math.max(next, Number(k) + 1); });
@@ -70,7 +76,10 @@ function refresh() {
             });
             detail += "\n" + errorText;
         }
+        if (orphaned) detail += recoveryCheck.recoverable ? "\n已确认旧任务退出。请先检查群内消息，再点“检查并恢复”。" : "\n暂时无法确认旧任务已退出，请先停止；仍无法恢复时需要维护检查。";
+        if (!active && s.recoveredAt) detail += "\n已恢复停止状态。历史编号已保留，检查旧消息后可重新开始。";
         var enabled = services();
+        detail += "\nAutoX服务：" + (enabled.indexOf("org.autojs.autoxjs.v7/") >= 0 ? "已开启" : "未开启，请先在无障碍设置中开启");
         detail += "\n控件辅助：" + (enabled.indexOf("local.wechat.accessibilityhelper/") >= 0 ? "已开启" : "未开启");
         detail += " · 触摸模式：" + (context.getSystemService("accessibility").isTouchExplorationEnabled() ? "已就绪" : "未就绪");
         detail += "\n系统屏幕朗读：" + (enabled.indexOf("com.bjbyhd.screenreader_huawei/") >= 0 ? "已开启" : "未开启");
@@ -79,6 +88,8 @@ function refresh() {
             ui.detailText.setText(detail);
             ui.nextText.setText("下次发送：@jarvis 测试" + code);
             ui.startButton.setEnabled(!busy && !active && !files.exists(BASE + "watch.lock"));
+            ui.recoverButton.setVisibility(orphaned ? 0 : 8);
+            ui.recoverButton.setEnabled(!busy && orphaned && recoveryCheck.recoverable);
         });
     } catch (e) { ui.run(function() { ui.hintText.setText("状态暂时无法读取：" + e); }); }
 }
@@ -101,6 +112,15 @@ ui.startButton.on("click", function() {
         app.launchPackage("com.tencent.mm");
     } catch (e) { ui.hintText.setText(String(e.message || e)); }
     finally { setTimeout(function() { busy = false; refresh(); }, 3000); }
+});
+ui.recoverButton.on("click", function() {
+    if (busy) return;
+    busy = true;
+    try {
+        recoveryController.recover();
+        ui.hintText.setText("已恢复为停止状态，历史编号已保留。请检查测试1旧消息和输入框，再开始；旧消息不会自动补发。");
+    } catch(e) { ui.hintText.setText("恢复未完成，请保持停止并检查：" + String(e.message || e)); }
+    finally { busy = false; refresh(); }
 });
 ui.stopButton.on("click", function() {
     files.write(STOP, "stopped from phone panel at " + new Date().toISOString());

@@ -6,6 +6,7 @@ var PKG = "com.tencent.mm";
 var BASE = "/sdcard/wechat-android-poc/";
 var DIR = BASE + "artifacts/";
 var policy = require(BASE + "mention-policy.js");
+var runRecovery = require(BASE + "run-recovery.js");
 var STATE = DIR + "watch-state.json";
 var LOG = DIR + "watch-events.jsonl";
 var STOP = BASE + "STOP";
@@ -249,6 +250,7 @@ function processBatch(observed) {
 }
 
 try {
+    files.write(BASE + "watch.lock", JSON.stringify(runRecovery.makeOwner()));
     if (files.exists(STATE)) {
         var previous = JSON.parse(files.read(STATE));
         if (previous.group !== state.group || previous.bot !== state.bot) throw new Error("State belongs to another target");

@@ -3,6 +3,8 @@ package local.wechat.accessibilityhelper;
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
+import android.provider.Settings;
 import android.graphics.Point;
 import android.graphics.Region;
 import android.hardware.display.DisplayManager;
@@ -18,17 +20,34 @@ public final class TouchModeService extends AccessibilityService {
     static String status = "服务未运行";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private DisplayManager displays;
+    private boolean observingServices;
+    private final Runnable refreshPassthrough = () -> {
+        if (instance == this && displays != null) applyPassthrough();
+    };
+    private final ContentObserver serviceChanges = new ContentObserver(handler) {
+        @Override public void onChange(boolean selfChange) { schedulePassthrough(); }
+    };
+    private void schedulePassthrough() {
+        if (instance != this || displays == null) return;
+        handler.removeCallbacks(refreshPassthrough);
+        handler.post(refreshPassthrough);
+        handler.postDelayed(refreshPassthrough, 400);
+        handler.postDelayed(refreshPassthrough, 1200);
+    }
     private final DisplayManager.DisplayListener listener = new DisplayManager.DisplayListener() {
-        public void onDisplayAdded(int id) { applyPassthrough(); }
-        public void onDisplayRemoved(int id) { applyPassthrough(); }
-        public void onDisplayChanged(int id) { applyPassthrough(); }
+        public void onDisplayAdded(int id) { schedulePassthrough(); }
+        public void onDisplayRemoved(int id) { schedulePassthrough(); }
+        public void onDisplayChanged(int id) { schedulePassthrough(); }
     };
     @Override protected void onServiceConnected() {
+        if (displays != null) cleanUp();
         instance = this;
         displays = getSystemService(DisplayManager.class);
         displays.registerDisplayListener(listener, handler);
-        applyPassthrough();
-        handler.postDelayed(() -> { if (instance == this) applyPassthrough(); }, 800);
+        getContentResolver().registerContentObserver(
+            Settings.Secure.getUriFor("enabled_accessibility_services"), false, serviceChanges);
+        observingServices = true;
+        schedulePassthrough();
     }
     @SuppressWarnings("deprecation") private void applyPassthrough() {
         try {
@@ -50,9 +69,12 @@ public final class TouchModeService extends AccessibilityService {
     }
     @Override public void onConfigurationChanged(Configuration config) {
         super.onConfigurationChanged(config);
-        if (displays != null) applyPassthrough();
+        if (displays != null) schedulePassthrough();
     }
-    @Override public void onAccessibilityEvent(AccessibilityEvent event) { }
+    @Override public void onAccessibilityEvent(AccessibilityEvent event) {
+        // Window transitions can accompany input-filter changes. Do not read the event or its source.
+        schedulePassthrough();
+    }
     @Override public void onInterrupt() { }
     @Override public boolean onUnbind(Intent intent) {
         cleanUp();
@@ -64,6 +86,10 @@ public final class TouchModeService extends AccessibilityService {
     }
     private void cleanUp() {
         handler.removeCallbacksAndMessages(null);
+        if (observingServices) {
+            getContentResolver().unregisterContentObserver(serviceChanges);
+            observingServices = false;
+        }
         if (displays != null) { displays.unregisterDisplayListener(listener); displays = null; }
         if (instance == this) instance = null;
         status = "服务已关闭";
