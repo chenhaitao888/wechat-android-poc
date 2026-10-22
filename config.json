@@ -5,7 +5,7 @@
   "command_pattern": "@jarvis 测试NNN",
   "reply_template": "收到，测试NNN（自动回复测试）。",
   "enabled": false,
-  "final_status": "stopped_after_recovery_tests",
+  "final_status": "stopped_time_limit_after_network_recovery_test",
   "runtime_control": "Phone panel starts/stops watcher; run-request.json selects 30-minute mode; STOP disables startup and stops the loop; this manifest is informational",
   "max_run_minutes": 30,
   "max_replies_per_run": 10,

@@ -24,3 +24,6 @@ __pycache__/
 /TEST_HOLD
 /inspection-label.txt
 /test-action.txt
+
+/NETWORK_OBSERVER_STOP
+/network-observer.lock
