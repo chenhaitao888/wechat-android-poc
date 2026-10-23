@@ -38,6 +38,7 @@ function runtimeStatus() {
         touchExploration: context.getSystemService("accessibility").isTouchExplorationEnabled(),
         foregroundServiceRunning: foregroundService.isRunning(),
         batteryOptimizationIgnored: foregroundService.isBatteryOptimizationIgnored(),
+        helperBatteryOptimizationIgnored: foregroundService.isBatteryOptimizationIgnored("local.wechat.accessibilityhelper"),
         enabledServices: String(android.provider.Settings.Secure.getString(context.getContentResolver(), "enabled_accessibility_services") || "")
     };
 }
@@ -65,7 +66,8 @@ function health() {
         usbConfigured: u ? u.getBooleanExtra("configured", false) : null,
         screenInteractive: runtime.screenInteractive, keyguardLocked: runtime.keyguardLocked,
         touchExploration: runtime.touchExploration, foregroundServiceRunning: runtime.foregroundServiceRunning,
-        batteryOptimizationIgnored: runtime.batteryOptimizationIgnored, enabledServices: runtime.enabledServices,
+        batteryOptimizationIgnored: runtime.batteryOptimizationIgnored,
+        helperBatteryOptimizationIgnored: runtime.helperBatteryOptimizationIgnored, enabledServices: runtime.enabledServices,
         elapsedSeconds: Math.round((android.os.SystemClock.elapsedRealtime() - monoStarted) / 1000)};
 }
 function stopIfRequested() {

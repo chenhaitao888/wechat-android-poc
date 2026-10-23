@@ -28,6 +28,7 @@ ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<button id="wechatButton" text="打开微信 / 返回等待" />' +
     '<button id="helperButton" text="打开微信控件辅助" />' +
     '<button id="settingsButton" text="打开无障碍设置" />' +
+    '<button id="batteryButton" text="打开电池优化设置" />' +
     '<button id="shortcutButton" text="添加桌面入口" />' +
     '<text text="支持最多5条未读中只有一条 @ 的纯文字批次。多条 @ 或边界不明会暂停。最多30分钟或10条回复后自动停止。" textSize="13sp" textColor="#68776F" marginTop="16" />' +
     '</vertical></scroll>');
@@ -83,7 +84,9 @@ function refresh() {
         var foreground = foregroundService.isRunning();
         detail += "\n前台运行：" + (foreground === true ? "已开启" : foreground === false ? "未开启，请在AutoX菜单开启前台服务" : "暂时无法确认");
         var exempt = foregroundService.isBatteryOptimizationIgnored();
-        detail += "\n电池优化：" + (exempt === true ? "已豁免" : exempt === false ? "未豁免，请按部署说明设置" : "暂时无法确认");
+        detail += "\nAutoX电池优化：" + (exempt === true ? "已豁免" : exempt === false ? "未豁免，请设为不允许优化" : "暂时无法确认");
+        var helperExempt = foregroundService.isBatteryOptimizationIgnored("local.wechat.accessibilityhelper");
+        detail += "\n控件辅助电池优化：" + (helperExempt === true ? "已豁免" : helperExempt === false ? "未豁免，请设为不允许优化" : "暂时无法确认");
         detail += "\nAutoX服务：" + (enabled.indexOf("org.autojs.autoxjs.v7/") >= 0 ? "已开启" : "未开启，请先在无障碍设置中开启");
         detail += "\n控件辅助：" + (enabled.indexOf("local.wechat.accessibilityhelper/") >= 0 ? "已开启" : "未开启");
         detail += " · 触摸模式：" + (context.getSystemService("accessibility").isTouchExplorationEnabled() ? "已就绪" : "未就绪");
@@ -98,6 +101,12 @@ function refresh() {
         });
     } catch (e) { ui.run(function() { ui.hintText.setText("状态暂时无法读取：" + e); }); }
 }
+function requireBatteryExemption(label, packageName) {
+    var exempt = foregroundService.isBatteryOptimizationIgnored(packageName);
+    if (exempt === true) return;
+    var reason = exempt === false ? "尚未豁免电池优化" : "电池优化状态暂时无法确认";
+    throw new Error(label + reason + "。请点“打开电池优化设置”，选择“所有应用”，将该应用设为“不允许”，返回后再开始。机器人保持停止。");
+}
 ui.startButton.on("click", function() {
     if (busy) return;
     busy = true;
@@ -110,6 +119,8 @@ ui.startButton.on("click", function() {
         var reader = enabled.indexOf("com.bjbyhd.screenreader_huawei/") >= 0;
         if (!helper && !reader) throw new Error("请先打开“微信控件辅助”，在系统无障碍设置中开启该服务。");
         if (!context.getSystemService("accessibility").isTouchExplorationEnabled()) throw new Error("触摸辅助模式尚未就绪，请稍候或检查辅助服务。");
+        requireBatteryExemption("AutoX", null);
+        if (helper) requireBatteryExemption("微信控件辅助", "local.wechat.accessibilityhelper");
         readState(); // Do not reset unreadable deduplication records.
         files.write(BASE + "run-request.json", JSON.stringify({maxMinutes: 30, source: "phone_panel", requestedAt: new Date().toISOString()}));
         if (files.exists(STOP) && !files.remove(STOP)) throw new Error("无法清除停止标记");
@@ -139,6 +150,10 @@ ui.helperButton.on("click", function() {
     catch(e) { ui.hintText.setText("辅助应用未能打开，请在桌面打开“微信控件辅助”。"); }
 });
 ui.settingsButton.on("click", function() { app.startActivity({action: "android.settings.ACCESSIBILITY_SETTINGS"}); });
+ui.batteryButton.on("click", function() {
+    try { app.startActivity({action: "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS"}); }
+    catch(e) { ui.hintText.setText("请在系统设置中搜索“电池优化”，选择“所有应用”，分别将 AutoX 和微信控件辅助设为“不允许”。"); }
+});
 ui.shortcutButton.on("click", function() {
     try {
         var manager = context.getSystemService("shortcut");

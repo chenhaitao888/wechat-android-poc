@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HEALTH = {
     "elapsedSeconds": 0, "usbConnected": False, "usbConfigured": False,
     "touchExploration": True, "foregroundServiceRunning": True,
-    "batteryOptimizationIgnored": True,
+    "batteryOptimizationIgnored": True, "helperBatteryOptimizationIgnored": True,
     "enabledServices": "org.autojs.autoxjs.v7/Service:local.wechat.accessibilityhelper/Service",
 }
 
@@ -29,7 +29,7 @@ def fixture():
     return state, events
 
 
-def check(state, events):
+def check(state, events, require_helper_battery=True):
     with tempfile.TemporaryDirectory() as directory:
         base = Path(directory)
         (base / "state.json").write_text(json.dumps(state))
@@ -38,7 +38,8 @@ def check(state, events):
             "--state", str(base / "state.json"), "--events", str(base / "events.jsonl"),
             "--expected-codes", "034", "--stop-reason", "time_limit", "--min-seconds", "60",
             "--max-seconds", "65", "--fully-disconnected", "--require-helper",
-            "--require-foreground-service", "--require-battery-exemption"],
+            "--require-foreground-service", "--require-battery-exemption"] +
+            (["--require-helper-battery-exemption"] if require_helper_battery else []),
             text=True, capture_output=True, check=False)
         return run.returncode, json.loads(run.stdout)
 
@@ -50,10 +51,12 @@ class RunSummaryTests(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(result["foregroundServiceSamples"], 2)
         self.assertEqual(result["batteryOptimizationExemptSamples"], 2)
+        self.assertEqual(result["helperBatteryOptimizationExemptSamples"], 2)
 
     def test_one_missing_false_or_nonboolean_sample_cannot_pass(self):
         for field, key in [("foregroundServiceRunning", "foreground_service_all_samples"),
-                           ("batteryOptimizationIgnored", "battery_exemption_all_samples")]:
+                           ("batteryOptimizationIgnored", "battery_exemption_all_samples"),
+                           ("helperBatteryOptimizationIgnored", "helper_battery_exemption_all_samples")]:
             for value in [None, False, "true"]:
                 with self.subTest(field=field, value=value):
                     state, events = fixture()
@@ -64,6 +67,15 @@ class RunSummaryTests(unittest.TestCase):
                     status, result = check(state, events)
                     self.assertEqual(status, 1)
                     self.assertFalse(result["checks"][key])
+
+    def test_old_logs_remain_usable_without_claiming_helper_battery_was_checked(self):
+        state, events = fixture()
+        events[0]["detail"]["health"].pop("helperBatteryOptimizationIgnored")
+        events[3]["detail"].pop("helperBatteryOptimizationIgnored")
+        status, result = check(state, events, require_helper_battery=False)
+        self.assertEqual(status, 0)
+        self.assertEqual(result["helperBatteryOptimizationExemptSamples"], 0)
+        self.assertNotIn("helper_battery_exemption_all_samples", result["checks"])
 
     def test_long_pause_cannot_pass_with_only_start_and_end_samples(self):
         state, events = fixture()

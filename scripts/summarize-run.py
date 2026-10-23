@@ -44,6 +44,7 @@ def summarize(state, events):
         "usbDisconnectedSamples":sum(s["health"].get("usbConnected") is False and s["health"].get("usbConfigured") is False for s in samples),
         "foregroundServiceSamples":sum(s["health"].get("foregroundServiceRunning") is True for s in samples),
         "batteryOptimizationExemptSamples":sum(s["health"].get("batteryOptimizationIgnored") is True for s in samples),
+        "helperBatteryOptimizationExemptSamples":sum(s["health"].get("helperBatteryOptimizationIgnored") is True for s in samples),
         "touchExplorationEnabledSamples":sum(s["health"].get("touchExploration") is True for s in samples),
         "helperEnabledSamples":sum("local.wechat.accessibilityhelper/" in s["health"].get("enabledServices", "") for s in samples),
         "accessibilityStateKnownSamples":sum(isinstance(s["health"].get("enabledServices"), str) for s in samples),
@@ -69,6 +70,7 @@ def main():
     parser.add_argument("--require-helper", action="store_true")
     parser.add_argument("--require-foreground-service", action="store_true")
     parser.add_argument("--require-battery-exemption", action="store_true")
+    parser.add_argument("--require-helper-battery-exemption", action="store_true")
     parser.add_argument("--output", help="JSON filename written only under the local artifacts directory")
     args = parser.parse_args()
     if not all(re.fullmatch(r"[0-9]{3}", code) for code in args.expected_codes) or len(set(args.expected_codes)) != len(args.expected_codes):
@@ -100,6 +102,8 @@ def main():
         checks["foreground_service_all_samples"] = result["foregroundServiceSamples"] == result["healthSamples"]
     if args.require_battery_exemption:
         checks["battery_exemption_all_samples"] = result["batteryOptimizationExemptSamples"] == result["healthSamples"]
+    if args.require_helper_battery_exemption:
+        checks["helper_battery_exemption_all_samples"] = result["helperBatteryOptimizationExemptSamples"] == result["healthSamples"]
     result["checks"] = checks
     result["passed"] = all(checks.values())
     result["deliveryConfirmation"] = "Requires separate recipient confirmation; outgoing bubbles alone do not prove delivery."

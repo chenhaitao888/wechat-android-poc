@@ -13,8 +13,8 @@ function isRunning() {
         return false;
     } catch (e) { return null; }
 }
-function isBatteryOptimizationIgnored() {
-    try { return !!context.getSystemService("power").isIgnoringBatteryOptimizations(context.getPackageName()); }
+function isBatteryOptimizationIgnored(packageName) {
+    try { return !!context.getSystemService("power").isIgnoringBatteryOptimizations(packageName || context.getPackageName()); }
     catch (e) { return null; }
 }
 module.exports = {isRunning:isRunning, isBatteryOptimizationIgnored:isBatteryOptimizationIgnored};

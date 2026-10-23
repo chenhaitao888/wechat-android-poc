@@ -54,7 +54,7 @@ function host(options = {}) {
             ensureDir: () => {},
         },
         require: name => {
-            if (name === BASE + 'foreground-service.js') return {isRunning:() => !inWindow(options.foregroundUnavailable),isBatteryOptimizationIgnored:() => true};
+            if (name === BASE + 'foreground-service.js') return {isRunning:() => !inWindow(options.foregroundUnavailable),isBatteryOptimizationIgnored:pkg => pkg === 'local.wechat.accessibilityhelper' && Object.hasOwn(options,'helperBatteryExempt') ? options.helperBatteryExempt : true};
             if (name === BASE + 'run-recovery.js') return {makeOwner:() => ({version:1,pid:101,uid:10001,bootCount:7,packageName:'org.autojs.autoxjs.v7',processName:'org.autojs.autoxjs.v7:script',processStartedElapsedMs:100})};
             assert.equal(name, BASE + 'mention-policy.js'); return policy;
         },
@@ -310,4 +310,16 @@ test('deadline reached inside a batch is recorded as a timed stop and releases t
     assert.equal(s.events.at(-1).detail.reason,'time_limit');assert.equal(h.disk.has(LOCK),false);
     assert.deepEqual(s.state.commands,prior.commands);
     assert.equal(s.events.filter(e=>e.type==='send_attempt').length,0);
+});
+
+
+test('helper battery status is recorded independently without assuming unknown means exempt', () => {
+    for (const helperBatteryExempt of [true, false, null]) {
+        const h=host({helperBatteryExempt,stopAfterMs:2400});h.run();const s=h.snapshot();
+        assert.equal(s.state.health.helperBatteryOptimizationIgnored,helperBatteryExempt);
+        assert.equal(s.state.health.batteryOptimizationIgnored,true);
+        const start=s.events.find(e=>e.type==='started');
+        assert.equal(start.detail.health.helperBatteryOptimizationIgnored,helperBatteryExempt);
+        assert.deepEqual(s.state.commands,prior.commands);
+    }
 });
