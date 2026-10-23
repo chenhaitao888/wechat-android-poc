@@ -29,17 +29,18 @@ def fixture():
     return state, events
 
 
-def check(state, events, require_helper_battery=True):
+def check(state, events, require_helper_battery=True, expected_replies=None):
     with tempfile.TemporaryDirectory() as directory:
         base = Path(directory)
         (base / "state.json").write_text(json.dumps(state))
         (base / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events))
         run = subprocess.run([sys.executable, str(ROOT / "scripts/summarize-run.py"),
             "--state", str(base / "state.json"), "--events", str(base / "events.jsonl"),
-            "--expected-codes", "034", "--stop-reason", "time_limit", "--min-seconds", "60",
+            "--stop-reason", "time_limit", "--min-seconds", "60",
             "--max-seconds", "65", "--fully-disconnected", "--require-helper",
             "--require-foreground-service", "--require-battery-exemption"] +
-            (["--require-helper-battery-exemption"] if require_helper_battery else []),
+            (["--require-helper-battery-exemption"] if require_helper_battery else []) +
+            (["--expected-replies", *expected_replies] if expected_replies else ["--expected-codes", "034"]),
             text=True, capture_output=True, check=False)
         return run.returncode, json.loads(run.stdout)
 
@@ -76,6 +77,25 @@ class RunSummaryTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(result["helperBatteryOptimizationExemptSamples"], 0)
         self.assertNotIn("helper_battery_exemption_all_samples", result["checks"])
+
+    def test_ordinary_text_receipts_are_checked_without_test_codes(self):
+        state, events = fixture()
+        events[1]["detail"] = {"messageId": "text-1"}
+        events[2]["detail"] = {"messageId": "text-1"}
+        status, result = check(state, events, expected_replies=["text-1"])
+        self.assertEqual(status, 0)
+        self.assertEqual(result["sendCounts"], {"text-1": 1})
+
+    def test_repeated_or_mismatched_receipts_cannot_pass(self):
+        for duplicate in [False, True]:
+            state, events = fixture()
+            events[1]["detail"] = {"messageId": "text-1"}
+            events[2]["detail"] = {"messageId": "text-1" if duplicate else "text-2"}
+            if duplicate:
+                events.insert(2, copy.deepcopy(events[1]))
+            status, result = check(state, events, expected_replies=["text-1"])
+            self.assertEqual(status, 1)
+            self.assertFalse(result["passed"])
 
     def test_long_pause_cannot_pass_with_only_start_and_end_samples(self):
         state, events = fixture()

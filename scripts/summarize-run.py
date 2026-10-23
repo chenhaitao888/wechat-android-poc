@@ -32,8 +32,8 @@ def summarize(state, events):
     gaps = [b-a for a,b in zip(elapsed, elapsed[1:])]
     duration = (timestamp(last["time"]) - start).total_seconds()
     coverage_gaps = [elapsed[0]] + gaps + [duration-elapsed[-1]]
-    sends = Counter(e["detail"]["code"] for e in run if e["type"] == "send_attempt")
-    bubbles = Counter(e["detail"]["code"] for e in run if e["type"] == "outgoing_bubble_observed")
+    sends = Counter((e["detail"].get("messageId") or e["detail"]["code"]) for e in run if e["type"] == "send_attempt")
+    bubbles = Counter((e["detail"].get("messageId") or e["detail"]["code"]) for e in run if e["type"] == "outgoing_bubble_observed")
     temperatures = [s["health"]["temperatureC"] for s in samples if s["health"].get("temperatureC") is not None]
     return {
         "startedAt":state["startedAt"], "stoppedAt":last["time"], "durationSeconds":round(duration, 3),
@@ -61,7 +61,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--events", type=Path, required=True)
-    parser.add_argument("--expected-codes", nargs="+", required=True)
+    expected_group = parser.add_mutually_exclusive_group(required=True)
+    expected_group.add_argument("--expected-codes", nargs="+", help="Legacy three-digit test codes")
+    expected_group.add_argument("--expected-replies", nargs="+", help="Test codes or local receipts such as text-1")
     parser.add_argument("--stop-reason", choices=["time_limit", "stop_file", "send_limit"], required=True)
     parser.add_argument("--min-seconds", type=float, default=0)
     parser.add_argument("--max-seconds", type=float)
@@ -73,19 +75,21 @@ def main():
     parser.add_argument("--require-helper-battery-exemption", action="store_true")
     parser.add_argument("--output", help="JSON filename written only under the local artifacts directory")
     args = parser.parse_args()
-    if not all(re.fullmatch(r"[0-9]{3}", code) for code in args.expected_codes) or len(set(args.expected_codes)) != len(args.expected_codes):
-        parser.error("expected codes must be distinct three-digit numbers")
+    expected_replies = args.expected_codes or args.expected_replies
+    pattern = r"[0-9]{3}" if args.expected_codes else r"(?:[0-9]{3}|text-[1-9][0-9]*)"
+    if not all(re.fullmatch(pattern, key) for key in expected_replies) or len(set(expected_replies)) != len(expected_replies):
+        parser.error("expected replies must be distinct test codes or valid local receipt IDs")
     state = json.loads(args.state.read_text())
     events = [json.loads(line) for line in args.events.read_text().splitlines() if line]
     result = summarize(state, events)
-    expected = {code:1 for code in args.expected_codes}
+    expected = {key:1 for key in expected_replies}
     checks = {
         "stopped_normally":result["status"] == "stopped" and result["terminalEvent"] == "stopped",
         "stop_reason":result["stopReason"] == args.stop_reason,
         "minimum_duration":result["durationSeconds"] >= args.min_seconds,
         "expected_single_sends":result["sendCounts"] == expected,
         "outgoing_bubbles_observed":result["observedBubbleCounts"] == expected,
-        "state_count_matches":result["stateSendCount"] == len(args.expected_codes),
+        "state_count_matches":result["stateSendCount"] == len(expected_replies),
         "no_uncertain_send":result["uncertainSends"] == 0,
         "no_ambiguous_batch":result["ambiguousBatches"] == 0,
         "health_coverage":result["healthSamples"] >= 2 and result["monotonicHealthSamples"] and result["maxHealthCoverageGapSeconds"] <= args.max_health_gap_seconds,

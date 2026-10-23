@@ -109,3 +109,26 @@ test('lock archival failure keeps startup blocked without losing deduplication r
     assert.ok(h.disk.has(LOCK));
     assert.deepEqual(JSON.parse(h.disk.get(STATE)).commands,ledger.commands);
 });
+
+
+const textEntry={status:'attempting',incomingText:'@jarvis 一个问题',sender:'tester',reply:'收到你的消息（自动回复测试，回执 Q3）。'};
+test('process and reboot recovery preserve ordinary receipts and their sequence',()=>{
+    for(const snapshot of [current,{...current,bootCount:8}]) {
+        const before={...ledger,boundaryVersion:4,textReplies:{'text-3':textEntry,'text-4':{...textEntry,status:'uncertain'}}};
+        const h=host({current:snapshot,stateRaw:JSON.stringify(before)});h.controller.recover();
+        const after=JSON.parse(h.disk.get(STATE));
+        assert.deepEqual(after.textReplies,before.textReplies);assert.equal(after.boundaryVersion,4);
+        assert.deepEqual(after.commands,before.commands);assert.equal(after.status,'stopped');
+    }
+});
+test('missing counters, malformed receipts and counter rollback block recovery without rewriting evidence',()=>{
+    const cases=[{textReplies:{}},{boundaryVersion:1},{boundaryVersion:1,textReplies:[]},
+        {boundaryVersion:2,textReplies:{'text-3':textEntry}},
+        {boundaryVersion:3,textReplies:{'text-3':{...textEntry,sender:''}}},
+        {boundaryVersion:9007199254740992,textReplies:{}}];
+    for(const extra of cases) {
+        const raw=JSON.stringify({...ledger,...extra});const h=host({stateRaw:raw});
+        assert.throws(()=>h.controller.recover(),/Recovery refused/);
+        assert.equal(h.disk.get(STATE),raw);assert.ok(h.disk.has(LOCK));assert.equal(h.writes.length,0);
+    }
+});

@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const policy = require('../mention-policy');
+const recovery = require('../run-recovery');
 const source = fs.readFileSync(path.join(__dirname, '..', 'watch-test-group.js'), 'utf8');
 const BASE = '/sdcard/wechat-android-poc/';
 const STATE = BASE + 'artifacts/watch-state.json';
@@ -55,7 +56,7 @@ function host(options = {}) {
         },
         require: name => {
             if (name === BASE + 'foreground-service.js') return {isRunning:() => !inWindow(options.foregroundUnavailable),isBatteryOptimizationIgnored:pkg => pkg === 'local.wechat.accessibilityhelper' && Object.hasOwn(options,'helperBatteryExempt') ? options.helperBatteryExempt : true};
-            if (name === BASE + 'run-recovery.js') return {makeOwner:() => ({version:1,pid:101,uid:10001,bootCount:7,packageName:'org.autojs.autoxjs.v7',processName:'org.autojs.autoxjs.v7:script',processStartedElapsedMs:100})};
+            if (name === BASE + 'run-recovery.js') return {validLedger:recovery.validLedger,makeOwner:() => ({version:1,pid:101,uid:10001,bootCount:7,packageName:'org.autojs.autoxjs.v7',processName:'org.autojs.autoxjs.v7:script',processStartedElapsedMs:100})};
             assert.equal(name, BASE + 'mention-policy.js'); return policy;
         },
         java: {io:{File}},
@@ -321,5 +322,93 @@ test('helper battery status is recorded independently without assuming unknown m
         const start=s.events.find(e=>e.type==='started');
         assert.equal(start.detail.health.helperBatteryOptimizationIgnored,helperBatteryExempt);
         assert.deepEqual(s.state.commands,prior.commands);
+    }
+});
+
+
+// Keep the real batch policy, persistence, send ordering and boundary advancement.
+// Only native UI reads/actions are replaced with an in-memory conversation.
+function ordinaryTextHost(options={}) {
+    const h=pageWaitHost(options);
+    h.evaluate(`
+        var draft='',sendClicks=0,draftWrites=0,clickFails=false,confirmSend=true,attemptSavedBeforeClick=false;
+        var oldRow={text:'@jarvis 测试021',sender:'tester',direction:'incoming',simpleText:true,fullyVisible:true};
+        var oldAck={text:'收到，测试021（自动回复测试）。',sender:'',direction:'outgoing',simpleText:true,fullyVisible:true};
+        var memoryRows=[oldRow,oldAck],memoryObservation;
+        groupOK=function(){return true;};
+        chatRows=function(){return memoryRows.slice();};
+        observation=function(){return memoryObservation;};
+        waitForChatReady=function(){};backToList=function(){};
+        testNode.text=function(){return draft;};
+        testNode.setText=function(value){draftWrites++;draft=value;return true;};
+        inputBox=function(){return testNode;};
+        findMessage=function(text,side){return memoryRows.some(function(r){return r.direction===side && policy.compact(r.text)===policy.compact(text);}) ? testNode : null;};
+        var sendNode={bounds:testNode.bounds,enabled:function(){return true;},click:function(){
+            var saved=JSON.parse(files.read(STATE));
+            var entry=saved.textReplies['text-'+state.boundaryVersion];
+            attemptSavedBeforeClick=!!entry && entry.status==='attempting';
+            if(!attemptSavedBeforeClick) throw new Error('Attempt must be durable before click');
+            sendClicks++;
+            if(clickFails) return false;
+            if(confirmSend) memoryRows.push({text:draft,sender:'',direction:'outgoing',simpleText:true,fullyVisible:true});
+            draft='';return true;
+        }};
+        packageName=function(){return {text:function(){return {findOnce:function(){return sendNode;}};}};};
+        rememberBoundary(memoryRows);
+        function deliverQuestion(text) {
+            memoryRows.push({text:text,sender:'tester',direction:'incoming',simpleText:true,fullyVisible:true});
+            memoryObservation={preview:'[有人@我] tester: '+text,unread:'1',row:{click:function(){return true;}}};
+            processBatch(memoryObservation);
+        }
+    `);
+    return h;
+}
+test('three separately delivered identical questions each get one unique receipt',()=>{
+    const h=ordinaryTextHost();
+    for(let i=0;i<3;i++) h.evaluate('deliverQuestion("@jarvis 这个产品怎么申请？");');
+    const s=h.snapshot();
+    assert.equal(h.evaluate('sendClicks'),3);assert.equal(h.evaluate('attemptSavedBeforeClick'),true);
+    assert.deepEqual(Object.keys(s.state.textReplies),['text-1','text-2','text-3']);
+    assert.equal(new Set(Object.values(s.state.textReplies).map(x=>x.reply)).size,3);
+    assert.ok(Object.values(s.state.textReplies).every(x=>x.status==='outgoing_bubble_observed'));
+    assert.equal(s.state.boundaryVersion,4);assert.deepEqual(s.state.commands,prior.commands);
+});
+test('a failed send keeps a durable attempt and cannot click again for the same boundary',()=>{
+    const h=ordinaryTextHost();h.evaluate('clickFails=true;');
+    assert.throws(()=>h.evaluate('deliverQuestion("@jarvis 申请需要什么材料？");'),/Send result uncertain/);
+    assert.equal(h.snapshot().state.textReplies['text-1'].status,'attempting');
+    h.evaluate('clickFails=false;processBatch(memoryObservation);');
+    assert.equal(h.evaluate('sendClicks'),1);assert.equal(h.evaluate('draftWrites'),1);
+    assert.equal(h.snapshot().state.textReplies['text-1'].status,'attempting');
+});
+test('an unconfirmed outgoing bubble is never automatically retried',()=>{
+    const h=ordinaryTextHost();h.evaluate('confirmSend=false;');
+    assert.throws(()=>h.evaluate('deliverQuestion("@jarvis 申请需要什么材料？");'),/Outgoing bubble not confirmed/);
+    assert.equal(h.snapshot().state.textReplies['text-1'].status,'uncertain');
+    h.evaluate('processBatch(memoryObservation);');
+    assert.equal(h.evaluate('sendClicks'),1);
+});
+test('a receipt already visible before sending is a conflict, not proof of a new reply',()=>{
+    const h=ordinaryTextHost();
+    h.evaluate('memoryRows.unshift({text:"收到你的消息（自动回复测试，回执 Q1）。",sender:"",direction:"outgoing",simpleText:true,fullyVisible:true});');
+    assert.throws(()=>h.evaluate('deliverQuestion("@jarvis 一个新问题");'),/text_receipt_conflict/);
+    assert.equal(h.evaluate('sendClicks'),0);assert.equal(h.evaluate('draftWrites'),0);
+    assert.deepEqual(h.snapshot().state.textReplies,{});
+});
+test('starting again keeps receipt history and allocates a fresh boundary number',()=>{
+    const first=ordinaryTextHost();first.evaluate('deliverQuestion("@jarvis 相同的问题");');
+    const before=first.snapshot().state;
+    const next=ordinaryTextHost({ledger:JSON.stringify(before)});
+    next.evaluate('deliverQuestion("@jarvis 相同的问题");');
+    const after=next.snapshot().state;
+    assert.deepEqual(after.textReplies['text-1'],before.textReplies['text-1']);
+    assert.ok(after.textReplies['text-3']);assert.equal(after.boundaryVersion,4);
+    assert.equal(next.evaluate('sendClicks'),1);assert.deepEqual(after.commands,prior.commands);
+});
+test('invalid text receipt state cannot be replaced by a fresh ledger during watcher startup',()=>{
+    for(const extra of [{textReplies:{}},{boundaryVersion:1,textReplies:[]},{boundaryVersion:-1,textReplies:{}}]) {
+        const ledger=JSON.stringify({...prior,...extra});const h=host({ledger});h.run();
+        assert.equal(h.disk.get(STATE),ledger);assert.equal(h.snapshot().uiCalls,0);
+        assert.equal(h.disk.has(LOCK),false);assert.ok(h.disk.has(BASE+'artifacts/last-start-error.json'));
     }
 });

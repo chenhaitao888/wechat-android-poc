@@ -55,6 +55,19 @@ function assess(owner, current, activeWorkers) {
 function validLedger(state) {
     if (!state || state.group !== "测试1" || state.bot !== "jarvis" ||
         !state.commands || typeof state.commands !== "object" || Array.isArray(state.commands)) return false;
+    var hasText = Object.prototype.hasOwnProperty.call(state,"textReplies");
+    var hasBoundary = Object.prototype.hasOwnProperty.call(state,"boundaryVersion");
+    if(hasText !== hasBoundary) return false;
+    if(hasText) {
+        if(!whole(state.boundaryVersion,0) || state.boundaryVersion>9007199254740991 ||
+            !state.textReplies || typeof state.textReplies!=="object" || Array.isArray(state.textReplies)) return false;
+        if(!Object.keys(state.textReplies).every(function(key) {
+            var match=/^text-([1-9][0-9]*)$/.exec(key), item=state.textReplies[key];
+            return match && Number(match[1])<=state.boundaryVersion && item && typeof item==="object" && !Array.isArray(item) &&
+                typeof item.status==="string" && typeof item.reply==="string" && item.reply.length>0 &&
+                typeof item.incomingText==="string" && item.incomingText.length>0 && typeof item.sender==="string" && item.sender.length>0;
+        })) return false;
+    }
     return Object.keys(state.commands).every(function(code) {
         var item = state.commands[code];
         return /^[0-9]{3}$/.test(code) && item && typeof item === "object" && !Array.isArray(item) && typeof item.status === "string";

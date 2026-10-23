@@ -20,11 +20,11 @@ ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<text text="测试1 · jarvis · 固定回复" textSize="16sp" textColor="#53645C" marginBottom="20" />' +
     '<text id="statusText" text="正在读取状态…" textSize="20sp" textColor="#163A31" textStyle="bold" />' +
     '<text id="detailText" text="" textSize="14sp" textColor="#53645C" marginTop="8" marginBottom="16" />' +
-    '<text id="nextText" text="下次发送：@jarvis 测试006" textSize="19sp" textColor="#163A31" marginBottom="16" />' +
+    '<text id="nextText" text="可以发送：@jarvis 普通问题" textSize="19sp" textColor="#163A31" marginBottom="16" />' +
     '<button id="startButton" text="开始测试（30分钟）" textSize="18sp" h="56" />' +
     '<button id="stopButton" text="停止回复" textSize="18sp" h="56" marginTop="8" />' +
     '<button id="recoverButton" text="检查并恢复" textSize="18sp" h="56" marginTop="8" visibility="gone" />' +
-    '<text id="hintText" text="开始前：开启 AutoX 前台服务、无障碍和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再发送新编号。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
+    '<text id="hintText" text="开始前：开启 AutoX 前台服务、无障碍和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再真正 @jarvis 发送普通文字。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
     '<button id="wechatButton" text="打开微信 / 返回等待" />' +
     '<button id="helperButton" text="打开微信控件辅助" />' +
     '<button id="settingsButton" text="打开无障碍设置" />' +
@@ -33,7 +33,10 @@ ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<text text="支持最多5条未读中只有一条 @ 的纯文字批次。多条 @ 或边界不明会暂停。最多30分钟或10条回复后自动停止。" textSize="13sp" textColor="#68776F" marginTop="16" />' +
     '</vertical></scroll>');
 function readState() {
-    return files.exists(STATE) ? JSON.parse(files.read(STATE)) : {commands: {}, sentThisRun: 0};
+    if(!files.exists(STATE)) return {commands:{},textReplies:{},boundaryVersion:0,sentThisRun:0};
+    var saved=JSON.parse(files.read(STATE));
+    if(!runRecovery.validLedger(saved)) throw new Error("历史回执记录异常，请保持停止并检查，不要清空记录。");
+    return saved;
 }
 function services() {
     return String(android.provider.Settings.Secure.getString(context.getContentResolver(), "enabled_accessibility_services") || "");
@@ -70,7 +73,10 @@ function refresh() {
                 baseline_not_unique_or_not_visible: "旧消息位置不在屏幕内或有重复，无法确认未读边界。请人工检查后再开始。",
                 unread_boundary_changed: "进入群时消息数量发生变化，已暂停。请人工检查后再开始。",
                 unsupported_or_hidden_message: "这批中含有图片、系统消息或未完整显示的消息，已暂停。",
-                last_message_does_not_match_preview: "最后一条消息与群列表摘要不一致，已暂停。"
+                last_message_does_not_match_preview: "最后一条消息与群列表摘要不一致，已暂停。",
+                empty_question: "@ 后没有问题正文，已暂停，请检查后重新开始。",
+                text_receipt_conflict: "普通文字回执与历史记录冲突，已停止，请保持现场并检查。",
+                invalid_text_ledger: "普通文字回执记录异常，已停止，请勿清空历史记录。"
             };
             Object.keys(explanations).some(function(key) {
                 if (errorText.indexOf(key) >= 0) { errorText = explanations[key]; return true; }
@@ -94,7 +100,7 @@ function refresh() {
         ui.run(function() {
             ui.statusText.setText(label);
             ui.detailText.setText(detail);
-            ui.nextText.setText("下次发送：@jarvis 测试" + code);
+            ui.nextText.setText("可发送：@jarvis 普通问题\n编号测试仍可用：测试" + code);
             ui.startButton.setEnabled(!busy && !active && !files.exists(BASE + "watch.lock"));
             ui.recoverButton.setVisibility(orphaned ? 0 : 8);
             ui.recoverButton.setEnabled(!busy && orphaned && recoveryCheck.recoverable);
@@ -125,7 +131,7 @@ ui.startButton.on("click", function() {
         files.write(BASE + "run-request.json", JSON.stringify({maxMinutes: 30, source: "phone_panel", requestedAt: new Date().toISOString()}));
         if (files.exists(STOP) && !files.remove(STOP)) throw new Error("无法清除停止标记");
         engines.execScriptFile(WORKER);
-        ui.hintText.setText("测试已启动。请保持微信聊天列表可见，再从另一台手机发送新的测试编号。");
+        ui.hintText.setText("测试已启动。请保持微信聊天列表可见，再从另一台手机真正 @jarvis 发送普通文字。");
         app.launchPackage("com.tencent.mm");
     } catch (e) { ui.hintText.setText(String(e.message || e)); }
     finally { setTimeout(function() { busy = false; refresh(); }, 3000); }

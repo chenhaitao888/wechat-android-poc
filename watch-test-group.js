@@ -28,7 +28,7 @@ var lock = new java.io.File(BASE + "watch.lock");
 if (!lock.createNewFile()) throw new Error("Watcher lock exists; verify stopped before restarting");
 var started = Date.now();
 var state = {group: "测试1", bot: "jarvis", status: "starting", sentThisRun: 0,
-    commands: {"001": {status: "recipient_confirmed_previous_one_shot"}}};
+    commands: {"001": {status: "recipient_confirmed_previous_one_shot"}}, textReplies: {}, boundaryVersion: 0};
 var lastObservation = "";
 var lastHeartbeat = 0;
 function runtimeStatus() {
@@ -112,7 +112,7 @@ function findMessage(value, side) {
     for (var i = 0; i < messages.size(); i++) {
         var node = messages.get(i);
         var normalized = String(node.text() || "").replace(/[\s\u2005\u200b]+/g, "");
-        if (visible(node) && normalized === value && messageSide(node, side)) return node;
+        if (visible(node) && normalized === policy.compact(value) && messageSide(node, side)) return node;
     }
     return null;
 }
@@ -225,7 +225,9 @@ function chatRows() {
 function rememberBoundary(rows) {
     var anchor=rows.slice(-2);
     if(!anchor.length || anchor.some(function(r){return !r.simpleText || !r.text;})) throw new Error("无法记录纯文字消息边界");
+    if(state.boundaryVersion>=9007199254740991) throw new Error("本地回执编号已达上限，请保持停止并维护。");
     state.anchor=anchor;
+    state.boundaryVersion++;
     persist();
 }
 function prepareBoundary() {
@@ -263,17 +265,21 @@ function processBatch(observed) {
     if(!fresh.row.click()) throw new Error("Could not open test group");
     waitForChatReady();
     var rows=chatRows();
-    var decision=policy.decide(fresh,rows,state.anchor,state.commands);
+    var decision=policy.decide(fresh,rows,state.anchor,state.commands,state.textReplies,state.boundaryVersion);
     event("batch_classified",{unread:fresh.unread,decision:decision});
     if(decision.kind==="pause") {
         files.write(DIR+"pending-batch.json",JSON.stringify({time:new Date().toISOString(),observation:{preview:fresh.preview,unread:fresh.unread},anchor:state.anchor,rows:rows,reason:decision.reason},null,2));
         throw new Error("这批消息无法准确归属 @，已暂停并保留记录："+decision.reason);
     }
     if(decision.kind!=="reply") { rememberBoundary(rows); backToList(); return; }
-    var code=decision.code;
-    if(!findMessage("@jarvis测试"+code,"incoming")) throw new Error("Incoming command not visible");
-    var reply="收到，测试"+code+"（自动回复测试）。";
+    var code=decision.code, messageId=decision.messageId, textMode=!!messageId;
+    var ledger=textMode ? state.textReplies : state.commands, receiptKey=textMode ? messageId : code;
+    var incomingText=textMode ? decision.incomingText : "@jarvis测试"+code;
+    if(!findMessage(incomingText,"incoming")) throw new Error("Incoming message not visible");
+    var reply=textMode ? "收到你的消息（自动回复测试，回执 Q"+state.boundaryVersion+"）。" : "收到，测试"+code+"（自动回复测试）。";
+    var eventRef=textMode ? {messageId:messageId} : {code:code};
     if(findMessage(reply,"outgoing")) {
+        if(textMode) throw new Error("text_receipt_conflict: 已有同编号回执，请保持停止并检查历史记录。");
         state.commands[code]={status:"existing_reply_observed",reply:reply};
         rememberBoundary(rows); backToList(); return;
     }
@@ -287,17 +293,20 @@ function processBatch(observed) {
     if(!policy.sameRows(rows,chatRows())) throw new Error("发送前消息发生变化，已暂停，请检查输入框草稿。");
     requireRuntimeReady();
     // Persist before clicking; uncertain results are never retried automatically.
-    state.commands[code]={status:"attempting",reply:reply,startedAt:new Date().toISOString(),unreadBatchSize:decision.batchSize};
+    ledger[receiptKey]={status:"attempting",reply:reply,startedAt:new Date().toISOString(),unreadBatchSize:decision.batchSize};
+    if(textMode) { ledger[receiptKey].incomingText=decision.incomingText; ledger[receiptKey].sender=decision.sender; }
     state.status="sending"; persist();
-    event("send_attempt",{code:code,reply:reply,unreadBatchSize:decision.batchSize});
+    var attempt={reply:reply,unreadBatchSize:decision.batchSize};
+    if(textMode) attempt.messageId=messageId; else attempt.code=code;
+    event("send_attempt",attempt);
     requireRuntimeReady();
     if(!send.click()) throw new Error("Send result uncertain; no retry");
     state.sentThisRun++;
     sleep(1600);
     var sent=groupOK() && findMessage(reply,"outgoing");
-    state.commands[code].status=sent ? "outgoing_bubble_observed" : "uncertain";
-    state.commands[code].finishedAt=new Date().toISOString();
-    persist(); event(state.commands[code].status,{code:code});
+    ledger[receiptKey].status=sent ? "outgoing_bubble_observed" : "uncertain";
+    ledger[receiptKey].finishedAt=new Date().toISOString();
+    persist(); event(ledger[receiptKey].status,eventRef);
     if(!sent) throw new Error("Outgoing bubble not confirmed; no retry");
     var after=chatRows(),last=after[after.length-1];
     if(!last || last.direction!=="outgoing" || last.text!==reply) throw new Error("回复后又有新消息，已暂停，请检查测试群。");
@@ -311,8 +320,12 @@ try {
     if (files.exists(STATE)) {
         var previous = JSON.parse(files.read(STATE));
         if (previous.group !== state.group || previous.bot !== state.bot) throw new Error("State belongs to another target");
-        if (!previous.commands || typeof previous.commands !== "object") throw new Error("Deduplication state invalid");
+        if (!runRecovery.validLedger(previous)) throw new Error("Deduplication state invalid");
         state.commands = previous.commands;
+        if (previous.textReplies !== undefined) {
+            state.textReplies = previous.textReplies;
+            state.boundaryVersion = previous.boundaryVersion;
+        }
     }
     stateLoaded = true;
     if (files.exists(STOP)) throw new Error("STOP file present; intentionally disabled");

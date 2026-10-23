@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const recovery = require('../run-recovery');
 const BASE = '/sdcard/wechat-android-poc/';
 const STATE = BASE + 'artifacts/watch-state.json';
 const STOP = BASE + 'STOP';
@@ -13,7 +14,7 @@ const panelSource = fs.readFileSync(path.join(__dirname, '../phone-panel.js'), '
 const serviceSource = fs.readFileSync(path.join(__dirname, '../foreground-service.js'), 'utf8');
 
 function host(options={}) {
-    const oldState = JSON.stringify({status:'stopped',commands:{'036':{status:'outgoing_bubble_observed'}},sentThisRun:1});
+    const oldState = options.ledger || JSON.stringify({group:'测试1',bot:'jarvis',status:'stopped',commands:{'036':{status:'outgoing_bubble_observed'}},sentThisRun:1});
     const disk = new Map([[STATE,oldState],[STOP,'keep stopped']]);
     const launched = [], activities = [], queried = [], elements = new Map();
     const ui = {layout:()=>{},statusBarColor:()=>{},run:fn=>fn()};
@@ -44,7 +45,7 @@ function host(options={}) {
     vm.runInNewContext(panelSource,{
         ui,context,
         files:{exists:p=>disk.has(p),read:p=>disk.get(p),write:(p,v)=>disk.set(p,v),remove:p=>disk.delete(p),ensureDir:()=>{}},
-        require:p=>p===BASE+'foreground-service.js' ? serviceVm.module.exports : {createController:()=>({})},
+        require:p=>p===BASE+'foreground-service.js' ? serviceVm.module.exports : {createController:()=>({}),validLedger:recovery.validLedger},
         engines:{myEngine:()=>ownEngine,all:()=>[ownEngine],execScriptFile:p=>launched.push(p)},
         android:{provider:{Settings:{Secure:{getString:()=>enabledServices}}}},
         app:{launchPackage:p=>activities.push(p),startActivity:intent=>activities.push(intent)},
@@ -86,4 +87,15 @@ test('battery settings button only opens the normal settings list and cannot sta
     assert.equal(h.activities[0].action,'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS');
     assert.deepEqual(h.launched,[]);assert.equal(h.disk.get(STOP),'keep stopped');
     assert.equal(h.disk.get(STATE),h.oldState);
+});
+
+
+test('an invalid ordinary-text ledger cannot clear STOP or launch a worker',()=>{
+    for(const extra of [{textReplies:{}},{boundaryVersion:1,textReplies:[]},{boundaryVersion:-1,textReplies:{}}]) {
+        const h=host({ledger:JSON.stringify({group:'测试1',bot:'jarvis',commands:{},...extra})});
+        h.click('startButton');
+        assert.equal(h.disk.get(STOP),'keep stopped');assert.equal(h.disk.get(STATE),h.oldState);
+        assert.deepEqual(h.launched,[]);assert.deepEqual(h.activities,[]);
+        assert.match(h.ui.hintText.text,/历史回执记录异常/);
+    }
 });

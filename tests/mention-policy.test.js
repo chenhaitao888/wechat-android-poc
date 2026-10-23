@@ -47,3 +47,57 @@ test('missing or ambiguous baseline refuses attribution',()=>{
 test('batches larger than five are not opened for automatic processing',()=>{
   assert.equal(classify(Array.from({length:6},(_,i)=>incoming(i===0?'@jarvis 测试022':'text'+i))).reason,'unread_count_unsupported');
 });
+
+
+function classifyText(batch, ledger={}, revision=1, overrides={}) {
+  const last=batch.at(-1);
+  return policy.decide({unread:String(batch.length),preview:'[有人@我] '+last.sender+': '+last.text,...overrides},
+    anchor.concat(batch),anchor,{},ledger,revision);
+}
+test('a short ordinary question receives a local receipt without a test number',()=>{
+  const row=incoming('@jarvis\u2005这个产品怎么申请？');
+  assert.deepEqual(classifyText([row]),{kind:'reply',messageId:'text-1',incomingText:row.text,sender:'tester',batchSize:1});
+});
+test('ordinary questions preserve their original spaces and punctuation',()=>{
+  const row=incoming('@jarvis Please explain A B.\n谢谢！');
+  assert.equal(classifyText([row]).incomingText,row.text);
+});
+test('the sole ordinary-text mention can have non-mention text on both sides',()=>{
+  assert.equal(classifyText([incoming('前文'),incoming('@jarvis 申请流程是什么？'),incoming('补充说明')]).kind,'reply');
+});
+test('repeated content in a later unread boundary receives a different receipt',()=>{
+  const row=incoming('@jarvis 相同的问题');
+  const first=classifyText([row]);
+  const ledger={[first.messageId]:{status:'outgoing_bubble_observed',incomingText:row.text,sender:row.sender}};
+  assert.equal(classifyText([row],ledger,2).messageId,'text-2');
+  assert.equal(classifyText([row],ledger,2).kind,'reply');
+});
+test('the same boundary is never retried after an attempt or uncertain result',()=>{
+  const row=incoming('@jarvis 一个问题');
+  for(const status of ['attempting','uncertain','outgoing_bubble_observed']) {
+    assert.equal(classifyText([row],{'text-1':{status,incomingText:row.text,sender:row.sender}}).kind,'already_handled');
+  }
+});
+test('a reused receipt with changed text or sender pauses instead of hiding a mismatch',()=>{
+  const row=incoming('@jarvis 一个问题');
+  for(const entry of [{incomingText:'different',sender:row.sender},{incomingText:row.text,sender:'someone else'}]) {
+    assert.equal(classifyText([row],{'text-1':{status:'attempting',...entry}}).reason,'text_receipt_conflict');
+  }
+});
+test('empty questions and other nickname prefixes cannot trigger a receipt',()=>{
+  assert.equal(classifyText([incoming('@jarvis\u2005   ')]).reason,'empty_question');
+  for(const text of ['@jarvis2 问题','@Jarvis 问题','引用：@jarvis 问题']) assert.equal(classifyText([incoming(text)]).kind,'pause');
+});
+test('copied ordinary mentions and unmentioned text do not reply without the genuine badge',()=>{
+  for(const text of ['@jarvis 普通问题','普通问题']) assert.equal(classifyText([incoming(text)],{},1,{preview:'tester: '+text}).kind,'skip');
+});
+test('multiple ordinary mentions and email at-signs remain ambiguous',()=>{
+  assert.equal(classifyText([incoming('@jarvis 问题一'),incoming('@jarvis 问题二')]).kind,'pause');
+  assert.equal(classifyText([incoming('@jarvis 请联系 a@b.com')]).kind,'pause');
+});
+test('ordinary questions require a valid persistent receipt sequence',()=>{
+  for(const revision of [undefined,null,0,-1,1.5,'1',Infinity,9007199254740992]) {
+    const row=incoming('@jarvis 问题');
+    assert.equal(policy.decide({preview:'[有人@我] tester: '+row.text,unread:'1'},anchor.concat([row]),anchor,{}, {},revision).reason,'invalid_text_ledger');
+  }
+});
