@@ -27,3 +27,8 @@ __pycache__/
 
 /NETWORK_OBSERVER_STOP
 /network-observer.lock
+
+# Agent integration: private runtime and dependency environment
+/backend/.venv/
+/backend/.local/
+/backend/.pytest_cache/

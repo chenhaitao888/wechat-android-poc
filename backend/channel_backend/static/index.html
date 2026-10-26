@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>渠道助手 · 答案审核</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main><header><span class="tag">本机联调 · 模拟数据</span><h1>渠道助手 / 答案审核</h1><p>先核对业务依据，再批准答案。本轮网页模拟任务不会发到微信。</p></header>
+<section id="login"><label>审核凭证<input id="key" type="password" autocomplete="off" placeholder="使用本机审核凭证，或通过 manage.py open 打开"></label><button id="connect">进入审核</button></section>
+<div id="workspace" hidden><section><h2>模拟一条群问题</h2><p>范围：测试1 · 渠道 A。A123 待补资料，A124 已完成；B999 用于测试其他渠道访问被拒绝。</p><form id="submit"><textarea id="question" required maxlength="1000">订单 A123 现在卡在哪一步？需要补什么资料？</textarea><button type="submit">提交给智能体</button></form></section>
+<div class="bar"><h2>问题与草稿</h2><span id="worker"></span><button id="refresh">刷新</button><button id="logout" class="secondary">退出审核</button></div><p id="notice" role="status"></p><div id="tasks"></div><section><h2>已审核发件箱</h2><p>只显示经审核的确定版本。这里的网页模拟任务不向手机开放领取。</p><div id="outbox"></div></section></div>
+<p id="error" role="alert"></p><footer>所有订单与流程均为虚构样本。手机异步接入、真正 @ 提问人与连续追问尚未启用。</footer></main><script src="/static/app.js" defer></script></body></html>

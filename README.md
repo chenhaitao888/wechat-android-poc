@@ -1,10 +1,10 @@
 # 安卓微信群 @ 固定回复 PoC
 
-本项目验证《渠道微信群 AI 机器人方案.md》中的安卓真机路径。范围只包含测试群 `测试1`、机器人群昵称 `jarvis` 和固定测试回复，没有接入大模型、知识库或服务端。
+本项目验证《渠道微信群 AI 机器人方案.md》中的安卓真机路径。手机端范围仍为测试群 `测试1`、机器人群昵称 `jarvis` 和固定测试回复。2026-10-26新增独立的 [Mac智能体后端联调](backend/README.md)：模拟订单查询、草稿审核和发件箱已打通，尚未连接手机收发，也未接真实业务或知识库。
 
 ## 获取与本地配置
 
-代码仓库：`chenhaitao888/wechat-android-poc`。开发环境为 macOS、Python 3、Node.js（语法检查）、JDK 和 Android adb。机器人运行时只需要安卓手机，Mac 用于开发和部署。
+代码仓库：`chenhaitao888/wechat-android-poc`。开发环境为 macOS、Python 3、Node.js（语法检查）、JDK 和 Android adb。固定回执机器人运行时只需要安卓手机，Mac 用于开发和部署。新增智能体后端首轮运行在本 Mac，进行智能体联调时需保持 Mac 运行。
 
 克隆后将 `device.example.json` 复制为本地 `device.json`，填写 `adb devices -l` 显示的设备编号。本文命令里的 `YOUR_DEVICE_SERIAL` 需要替换为该编号。该文件是联调说明，脚本实际目标群仍固定为 `测试1`。
 
