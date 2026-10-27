@@ -216,6 +216,29 @@ class ApiTests(Fixture,unittest.IsolatedAsyncioTestCase):
         r=await self.client.post('/api/messages',json=m,headers=h);b=await r.json();self.assertEqual(a['task_id'],b['task_id'])
         r=await self.client.post('/api/messages',json={**m,"content":"different"},headers=h);self.assertEqual(r.status,409)
 
+    async def test_phone_source_review_and_delivery_over_http(self):
+        device={"Authorization":"Bearer "+self.cfg["device_key"]}
+        reviewer={"Authorization":"Bearer "+self.cfg["review_key"]}
+        r=await self.client.post('/api/messages',json=self.message(),headers=device)
+        task=(await r.json())["task_id"]
+        r=await self.client.get('/api/outbox',headers=device)
+        self.assertEqual((await r.json())["items"],[])
+        self.store.update(task,status="draft_ready",draft="模拟答案")
+        r=await self.client.get('/api/review/tasks',headers=reviewer)
+        self.assertEqual((await r.json())["tasks"][0]["source"],"phone")
+        r=await self.client.post('/api/review/'+task,json={"decision":"approve","text":"模拟答案","version":1},headers=reviewer)
+        out=(await r.json())["outbox_id"]
+        r=await self.client.get('/api/outbox',headers=device)
+        item=(await r.json())["items"][0]
+        self.assertEqual(item["id"],out);self.assertNotIn("lease",item)
+        r=await self.client.post('/api/outbox/'+out+'/claim',json={},headers=device)
+        lease=(await r.json())["lease_token"]
+        payload={"lease_token":lease,"attempt_id":"http-phone-attempt"}
+        r=await self.client.post('/api/outbox/'+out+'/sending',json=payload,headers=device)
+        self.assertEqual(r.status,200)
+        r=await self.client.post('/api/outbox/'+out+'/ack',json={**payload,"outcome":"outgoing_observed","evidence":"test bubble"},headers=device)
+        self.assertEqual((await r.json())["status"],"outgoing_observed")
+
     async def test_web_demo_cannot_be_claimed_by_phone(self):
         h={"Authorization":"Bearer "+self.cfg["review_key"]}
         r=await self.client.post('/api/demo/messages',json={"content":"订单 A123 状态"},headers=h);task=(await r.json())["task_id"]

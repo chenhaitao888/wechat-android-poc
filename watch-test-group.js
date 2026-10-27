@@ -1,6 +1,6 @@
-// AutoX.js v7.2.4 / WeChat 8.0.79 / Huawei DCO-AL00 single-group PoC.
+// AutoX.js v7.2.4 / WeChat 8.0.79 single-group PoC (Huawei / Xiaomi).
 // Handles one attributable mention within 1–5 unread plain-text messages in 测试1.
-// No network calls, model, knowledge base, notification snooping, or other groups.
+// Optional reviewed-agent mode uses the local USB HTTP bridge; only 测试1 is allowed.
 auto.waitFor();
 var PKG = "com.tencent.mm";
 var BASE = "/sdcard/wechat-android-poc/";
@@ -13,9 +13,11 @@ var LOG = DIR + "watch-events.jsonl";
 var STOP = BASE + "STOP";
 var MAX_MS = 10 * 60 * 1000;
 var MAX_SENDS = 5;
+var MODE = "fixed", agent = null, lastAgentSync = 0;
 var requestPath = BASE + "run-request.json";
 if (files.exists(requestPath)) {
     var request = JSON.parse(files.read(requestPath));
+    if (request.mode === "agent") MODE = "agent";
     if (request.maxMinutes === 30) { MAX_MS = 30 * 60 * 1000; MAX_SENDS = 10; }
 }
 var monoStarted = android.os.SystemClock.elapsedRealtime();
@@ -276,6 +278,19 @@ function processBatch(observed) {
     var ledger=textMode ? state.textReplies : state.commands, receiptKey=textMode ? messageId : code;
     var incomingText=textMode ? decision.incomingText : "@jarvis测试"+code;
     if(!findMessage(incomingText,"incoming")) throw new Error("Incoming message not visible");
+    if (agent) {
+        // Consume only after both the current UI and the durable queue agree on this question.
+        sleep(350);
+        if (!policy.sameRows(rows,chatRows())) throw new Error("检查期间消息发生变化，问题未上报。");
+        var question=textMode ? decision.incomingText.replace(/^@jarvis[\s\u2005\u200b]+/,"") : "测试"+code;
+        var sender=textMode ? decision.sender : rows.filter(function(r){return r.direction==="incoming" && policy.compact(r.text)===policy.compact(incomingText);}).slice(-1)[0].sender;
+        var queued=agent.enqueue(textMode ? messageId : "code-"+code,question,sender);
+        ledger[receiptKey]={status:"agent_queued",reply:"",eventId:queued.body.event_id,
+            incomingText:textMode ? decision.incomingText : incomingText,sender:sender};
+        persist();
+        rememberBoundary(rows);backToList();
+        state.status="watching";state.agent=agent.summary();persist();return;
+    }
     var reply=textMode ? "收到你的消息（自动回复测试，回执 Q"+state.boundaryVersion+"）。" : "收到，测试"+code+"（自动回复测试）。";
     var eventRef=textMode ? {messageId:messageId} : {code:code};
     if(findMessage(reply,"outgoing")) {
@@ -315,6 +330,61 @@ function processBatch(observed) {
     state.status="watching"; persist();
 }
 
+function scrollChatToBottom() {
+    for(var i=0;i<5;i++) {
+        requireRuntimeReady();
+        if(!groupOK()) throw new Error("滚动时测试群标题变化");
+        var list=id(PKG+":id/bp0").findOnce();
+        if(!visible(list)) throw new Error("滚动时消息列表不可见");
+        var moved=list.scrollForward();
+        sleep(400);
+        if(!moved) return;
+    }
+    throw new Error("无法在限定次数内确认消息末尾，未发送答案。");
+}
+function sendAgentAnswer(reply,markClick) {
+    requireRuntimeReady();
+    var obs=observation();
+    if(!obs || obs.unread!=="0" || /^\[有人@我\]/.test(obs.preview)) throw new Error("待发送时出现新消息，已停止，请重新核查答案。");
+    if(!obs.row.click()) throw new Error("无法进入待回复测试群");
+    waitForChatReady();
+    var rows=chatRows();
+    if(!policy.stableTail(rows,state.anchor)) throw new Error("审核期间群消息边界变化，未发送答案。");
+    if(findMessage(reply,"outgoing")) throw new Error("屏幕内已有相同答案，无法确认新气泡，已停止待检查。");
+    var input=inputBox();
+    if(!visible(input) || String(input.text()||"")!=="") throw new Error("输入框已有草稿，未发送答案。");
+    requireRuntimeReady();
+    if(!input.setText(reply)) throw new Error("无法填写智能体答案");
+    waitForSendReady(reply);
+    scrollChatToBottom();
+    var send=waitForSendReady(reply);
+    if(!policy.stableTail(chatRows(),state.anchor)) throw new Error("填写后消息末尾发生变化或不可确认，未点击发送，请检查草稿。");
+    requireRuntimeReady();
+    markClick(); // fsync before the one and only physical send click.
+    state.status="sending";persist();
+    if(!send.click()) throw new Error("智能体答案发送结果不明，不会重试");
+    state.sentThisRun++;
+    sleep(1600);
+    var after=groupOK() ? chatRows() : [],last=after[after.length-1];
+    return !!last && last.direction==="outgoing" && last.text===reply && !!findMessage(reply,"outgoing");
+}
+function agentTick() {
+    if(Date.now()-lastAgentSync<5000) return;
+    lastAgentSync=Date.now();
+    stopIfRequested();
+    state.agent=agent.sync();persist();
+    var ready=!waitReason(runtimeStatus()) && observation();
+    var out=agent.next();
+    if(ready && ready.unread==="0" && !/^\[有人@我\]/.test(ready.preview) && out) {
+        stopIfRequested();
+        if(agent.deliver(out,sendAgentAnswer)) {
+            rememberBoundary(chatRows());backToList();
+            state.status="watching";
+        }
+        state.agent=agent.summary();persist();
+    }
+}
+
 try {
     files.write(BASE + "watch.lock", JSON.stringify(runRecovery.makeOwner()));
     if (files.exists(STATE)) {
@@ -328,6 +398,8 @@ try {
         }
     }
     stateLoaded = true;
+    state.mode = MODE;
+    if (MODE === "agent") agent = require(BASE + "agent-client.js").create(event);
     if (files.exists(STOP)) throw new Error("STOP file present; intentionally disabled");
     device.keepScreenOn(MAX_MS);
     state.startedAt = new Date().toISOString();
@@ -355,6 +427,7 @@ try {
             // Development-only gate makes unread batches reproducible on the device.
             if (!files.exists(BASE + "TEST_HOLD") && /^\[有人@我\]/.test(obs.preview)) processBatch(obs);
         }
+        if (agent && !files.exists(BASE + "TEST_HOLD")) agentTick();
         if (Date.now() - lastHeartbeat > 15000) {
             state.health = health();
             var powerKey = state.health.plugged + "|" + state.health.usbConnected + "|" + state.health.usbConfigured;
@@ -376,6 +449,7 @@ try {
 } catch (e) {
     state.status = files.exists(STOP) || e.stopReason === "time_limit" ? "stopped" : "halted";
     state.error = String(e);
+    if (agent) state.agent = agent.summary();
     if (state.status === "stopped") state.stopReason = files.exists(STOP) ? "stop_file" : "time_limit";
     if (stateLoaded) persist();
     else files.write(DIR + "last-start-error.json", JSON.stringify({time: new Date().toISOString(), error: String(e)}));

@@ -64,7 +64,8 @@ function validLedger(state) {
         if(!Object.keys(state.textReplies).every(function(key) {
             var match=/^text-([1-9][0-9]*)$/.exec(key), item=state.textReplies[key];
             return match && Number(match[1])<=state.boundaryVersion && item && typeof item==="object" && !Array.isArray(item) &&
-                typeof item.status==="string" && typeof item.reply==="string" && item.reply.length>0 &&
+                typeof item.status==="string" && typeof item.reply==="string" &&
+                (item.reply.length>0 || (item.status==="agent_queued" && /^[0-9a-f-]{36}$/.test(item.eventId))) &&
                 typeof item.incomingText==="string" && item.incomingText.length>0 && typeof item.sender==="string" && item.sender.length>0;
         })) return false;
     }

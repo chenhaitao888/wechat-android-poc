@@ -101,3 +101,15 @@ test('ordinary questions require a valid persistent receipt sequence',()=>{
     assert.equal(policy.decide({preview:'[有人@我] tester: '+row.text,unread:'1'},anchor.concat([row]),anchor,{}, {},revision).reason,'invalid_text_ledger');
   }
 });
+
+
+test('stable tail requires a unique complete anchor and rejects appended or hidden messages',()=>{
+    const {stableTail}=require('../mention-policy');
+    const a={text:'a',sender:'t',direction:'incoming',simpleText:true,fullyVisible:true};
+    const b={...a,text:'b'},c={...a,text:'c'};
+    assert.equal(stableTail([a,b,c],[b,c]),true);
+    assert.equal(stableTail([b,c],[b,c]),true);
+    assert.equal(stableTail([b,c,a],[b,c]),false);
+    assert.equal(stableTail([b,c,b,c],[b,c]),false);
+    assert.equal(stableTail([b,{...c,fullyVisible:false}],[b,c]),false);
+});

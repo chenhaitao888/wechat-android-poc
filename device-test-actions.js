@@ -28,10 +28,10 @@ if (action === "prepare") {
     if (!id("com.tencent.mm:id/actionbar_up_indicator").findOnce().click()) throw new Error("Cannot return to list");
     sleep(800);
     engines.execScriptFile(BASE + "open-phone-panel.js");
-} else if (action === "start" || action === "stop" || action === "wechat" || action === "recover") {
+} else if (action === "start" || action === "agent-start" || action === "stop" || action === "wechat" || action === "recover") {
     var heading = packageName("org.autojs.autoxjs.v7").text("微信群测试").findOnce();
     if (!heading) throw new Error("Test panel not foreground");
-    var label = action === "start" ? "开始测试（30分钟）" : action === "stop" ? "停止回复" : action === "recover" ? "检查并恢复" : "打开微信 / 返回等待";
+    var label = action === "agent-start" ? "开始智能体联调（USB连接MAC）" : action === "start" ? "开始固定回执测试（30分钟）" : action === "stop" ? "停止回复" : action === "recover" ? "检查并恢复" : "打开微信 / 返回等待";
     var button = packageName("org.autojs.autoxjs.v7").text(label).findOnce();
     if (!button || !button.click()) throw new Error("Panel button unavailable: " + label);
 }

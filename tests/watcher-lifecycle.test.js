@@ -412,3 +412,38 @@ test('invalid text receipt state cannot be replaced by a fresh ledger during wat
         assert.equal(h.disk.has(LOCK),false);assert.ok(h.disk.has(BASE+'artifacts/last-start-error.json'));
     }
 });
+
+
+test('agent intake durably queues a verified mention without clicking fixed reply',()=>{
+    const h=ordinaryTextHost();
+    h.evaluate(`var captured=[];agent={enqueue:function(receipt,question,sender){captured.push({receipt:receipt,question:question,sender:sender});return {body:{event_id:'00000000-0000-4000-8000-000000000001'}};},summary:function(){return {queued:1};}};
+        deliverQuestion('@jarvis 订单 A123 卡在哪一步？');`);
+    assert.equal(h.evaluate('sendClicks'),0);assert.equal(h.evaluate('draftWrites'),0);
+    assert.equal(h.evaluate('captured[0].question'),'订单 A123 卡在哪一步？');
+    const saved=h.snapshot().state;assert.equal(saved.textReplies['text-1'].status,'agent_queued');assert.ok(recovery.validLedger(saved));
+});
+test('approved agent answer checks empty input and message boundary before clicking',()=>{
+    const h=ordinaryTextHost();
+    h.evaluate(`memoryObservation={unread:'0',preview:'old',row:{click:function(){return true;}}};
+        sendNode.click=function(){sendClicks++;memoryRows.push({text:draft,sender:'',direction:'outgoing',simpleText:true,fullyVisible:true});draft='';return true;};
+        scrollChatToBottom=function(){};var marked=0;`);
+    assert.equal(h.evaluate('sendAgentAnswer("模拟数据：A123 待补资料",function(){marked++;});'),true);
+    assert.equal(h.evaluate('marked'),1);assert.equal(h.evaluate('sendClicks'),1);
+    const other=ordinaryTextHost();
+    other.evaluate(`memoryObservation={unread:'1',preview:'new',row:{click:function(){return true;}}};`);
+    assert.throws(()=>other.evaluate('sendAgentAnswer("answer",function(){});'),/出现新消息/);
+    assert.equal(other.evaluate('sendClicks+draftWrites'),0);
+});
+
+test('agent draft reflow allows a cropped old viewport but rejects a truly appended message',()=>{
+    for(const arrival of [false,true]) {
+        const h=ordinaryTextHost();
+        h.evaluate(`memoryObservation={unread:'0',preview:'old',row:{click:function(){return true;}}};
+            var scrollCalls=0;memoryRows.unshift({text:'older',sender:'tester',direction:'incoming',simpleText:true,fullyVisible:true});
+            scrollChatToBottom=function(){scrollCalls++;memoryRows.shift();${arrival?"memoryRows.push({text:'new arrival',sender:'tester',direction:'incoming',simpleText:true,fullyVisible:true});":""}};
+            sendNode.click=function(){sendClicks++;memoryRows.push({text:draft,sender:'',direction:'outgoing',simpleText:true,fullyVisible:true});draft='';return true;};`);
+        if(arrival)assert.throws(()=>h.evaluate('sendAgentAnswer("approved answer",function(){});'),/消息末尾发生变化/);
+        else assert.equal(h.evaluate('sendAgentAnswer("approved answer",function(){});'),true);
+        assert.equal(h.evaluate('scrollCalls'),1);assert.equal(h.evaluate('sendClicks'),arrival?0:1);
+    }
+});

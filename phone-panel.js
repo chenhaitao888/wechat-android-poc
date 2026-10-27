@@ -17,11 +17,12 @@ files.ensureDir(BASE + "artifacts/");
 ui.statusBarColor("#163A31");
 ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<text text="微信群测试" textSize="28sp" textColor="#163A31" textStyle="bold" marginBottom="8" />' +
-    '<text text="测试1 · jarvis · 固定回复" textSize="16sp" textColor="#53645C" marginBottom="20" />' +
+    '<text id="modeText" text="测试1 · jarvis" textSize="16sp" textColor="#53645C" marginBottom="20" />' +
     '<text id="statusText" text="正在读取状态…" textSize="20sp" textColor="#163A31" textStyle="bold" />' +
     '<text id="detailText" text="" textSize="14sp" textColor="#53645C" marginTop="8" marginBottom="16" />' +
     '<text id="nextText" text="可以发送：@jarvis 普通问题" textSize="19sp" textColor="#163A31" marginBottom="16" />' +
-    '<button id="startButton" text="开始测试（30分钟）" textSize="18sp" h="56" />' +
+    '<button id="startButton" text="开始固定回执测试（30分钟）" textSize="18sp" h="56" />' +
+    '<button id="agentButton" text="开始智能体联调（USB连接Mac）" textSize="17sp" h="56" marginTop="8" />' +
     '<button id="stopButton" text="停止回复" textSize="18sp" h="56" marginTop="8" />' +
     '<button id="recoverButton" text="检查并恢复" textSize="18sp" h="56" marginTop="8" visibility="gone" />' +
     '<text id="hintText" text="开始前：开启 AutoX 前台服务、无障碍和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再真正 @jarvis 发送普通文字。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
@@ -64,6 +65,11 @@ function refresh() {
         var code = ("000" + next).slice(-3);
         var age = s.updatedAt ? Math.max(0, Math.round((Date.now() - Date.parse(s.updatedAt)) / 1000)) : null;
         var detail = "本轮已回复 " + (s.sentThisRun || 0) + " 条";
+        if(s.mode==="agent" && s.agent) {
+            detail += "\n问题待上报 " + s.agent.queued + " · 已上报 " + s.agent.accepted + " · 失败 " + s.agent.failed;
+            if(s.agent.error) detail += "\n" + s.agent.error;
+            if(s.agent.awaitingAck) detail += "\n发送结果待同步/核查 " + s.agent.awaitingAck;
+        }
         if (active && s.startedAt) detail += " · 运行约 " + Math.floor((Date.now() - Date.parse(s.startedAt)) / 60000) + " 分钟";
         if (active && age !== null && age > 45) detail += "\n状态超过45秒未更新，请先停止并检查";
         if (s.error && s.status === "halted") {
@@ -99,9 +105,11 @@ function refresh() {
         detail += "\n系统屏幕朗读：" + (enabled.indexOf("com.bjbyhd.screenreader_huawei/") >= 0 ? "已开启" : "未开启");
         ui.run(function() {
             ui.statusText.setText(label);
+            ui.modeText.setText("测试1 · jarvis · " + (s.mode==="agent" ? "智能体 / 网页审核后回群" : "固定回执"));
             ui.detailText.setText(detail);
             ui.nextText.setText("可发送：@jarvis 普通问题\n编号测试仍可用：测试" + code);
             ui.startButton.setEnabled(!busy && !active && !files.exists(BASE + "watch.lock"));
+            ui.agentButton.setEnabled(!busy && !active && !files.exists(BASE + "watch.lock"));
             ui.recoverButton.setVisibility(orphaned ? 0 : 8);
             ui.recoverButton.setEnabled(!busy && orphaned && recoveryCheck.recoverable);
         });
@@ -113,7 +121,7 @@ function requireBatteryExemption(label, packageName) {
     var reason = exempt === false ? "尚未豁免电池优化" : "电池优化状态暂时无法确认";
     throw new Error(label + reason + "。请点“打开电池优化设置”，选择“所有应用”，将该应用设为“不允许”，返回后再开始。机器人保持停止。");
 }
-ui.startButton.on("click", function() {
+function startRun(mode) {
     if (busy) return;
     busy = true;
     try {
@@ -128,14 +136,17 @@ ui.startButton.on("click", function() {
         requireBatteryExemption("AutoX", null);
         if (helper) requireBatteryExemption("微信控件辅助", "local.wechat.accessibilityhelper");
         readState(); // Do not reset unreadable deduplication records.
-        files.write(BASE + "run-request.json", JSON.stringify({maxMinutes: 30, source: "phone_panel", requestedAt: new Date().toISOString()}));
+        if(mode==="agent") require(BASE+"agent-client.js").config();
+        files.write(BASE + "run-request.json", JSON.stringify({maxMinutes: 30, mode:mode, source: "phone_panel", requestedAt: new Date().toISOString()}));
         if (files.exists(STOP) && !files.remove(STOP)) throw new Error("无法清除停止标记");
         engines.execScriptFile(WORKER);
-        ui.hintText.setText("测试已启动。请保持微信聊天列表可见，再从另一台手机真正 @jarvis 发送普通文字。");
+        ui.hintText.setText(mode==="agent" ? "智能体联调已启动。USB保持连接、微信列表可见；问题上报后在Mac审核，通过才会回群。" : "固定回执已启动。请保持微信聊天列表可见，再真正 @jarvis 发送普通文字。");
         app.launchPackage("com.tencent.mm");
     } catch (e) { ui.hintText.setText(String(e.message || e)); }
     finally { setTimeout(function() { busy = false; refresh(); }, 3000); }
-});
+}
+ui.startButton.on("click", function(){startRun("fixed");});
+ui.agentButton.on("click", function(){startRun("agent");});
 ui.recoverButton.on("click", function() {
     if (busy) return;
     busy = true;

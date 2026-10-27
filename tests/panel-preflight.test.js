@@ -18,7 +18,7 @@ function host(options={}) {
     const disk = new Map([[STATE,oldState],[STOP,'keep stopped']]);
     const launched = [], activities = [], queried = [], elements = new Map();
     const ui = {layout:()=>{},statusBarColor:()=>{},run:fn=>fn()};
-    for (const name of ['statusText','detailText','nextText','hintText','startButton','stopButton',
+    for (const name of ['statusText','detailText','nextText','hintText','startButton','stopButton','agentButton','modeText',
         'recoverButton','wechatButton','helperButton','settingsButton','batteryButton','shortcutButton']) {
         const element = {text:'',enabled:true,handlers:{},setText(text){this.text=text;},
             setEnabled(value){this.enabled=value;},setVisibility(){},on(event,fn){this.handlers[event]=fn;}};
@@ -45,7 +45,7 @@ function host(options={}) {
     vm.runInNewContext(panelSource,{
         ui,context,
         files:{exists:p=>disk.has(p),read:p=>disk.get(p),write:(p,v)=>disk.set(p,v),remove:p=>disk.delete(p),ensureDir:()=>{}},
-        require:p=>p===BASE+'foreground-service.js' ? serviceVm.module.exports : {createController:()=>({}),validLedger:recovery.validLedger},
+        require:p=>p===BASE+'foreground-service.js' ? serviceVm.module.exports : p===BASE+'agent-client.js' ? {config:()=>{if(!options.agentConfigured)throw Error('尚未配置智能体连接');return {};}} : {createController:()=>({}),validLedger:recovery.validLedger},
         engines:{myEngine:()=>ownEngine,all:()=>[ownEngine],execScriptFile:p=>launched.push(p)},
         android:{provider:{Settings:{Secure:{getString:()=>enabledServices}}}},
         app:{launchPackage:p=>activities.push(p),startActivity:intent=>activities.push(intent)},
@@ -98,4 +98,14 @@ test('an invalid ordinary-text ledger cannot clear STOP or launch a worker',()=>
         assert.deepEqual(h.launched,[]);assert.deepEqual(h.activities,[]);
         assert.match(h.ui.hintText.text,/历史回执记录异常/);
     }
+});
+
+test('agent mode requires provisioned credentials and remains distinct from fixed receipts',()=>{
+    const missing=host();missing.click('agentButton');
+    assert.deepEqual(missing.launched,[]);assert.equal(missing.disk.get(STOP),'keep stopped');
+    assert.match(missing.ui.hintText.text,/尚未配置/);
+    const ready=host({agentConfigured:true});ready.click('agentButton');
+    assert.equal(JSON.parse(ready.disk.get(BASE+'run-request.json')).mode,'agent');
+    assert.deepEqual(ready.launched,[BASE+'watch-test-group.js']);
+    const fixed=host();fixed.click('startButton');assert.equal(JSON.parse(fixed.disk.get(BASE+'run-request.json')).mode,'fixed');
 });

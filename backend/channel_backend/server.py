@@ -77,7 +77,7 @@ def create_app(cfg, store, business, *, start_worker=True):
         return web.FileResponse(Path(__file__).parent/"static"/name)
 
     async def health(request):
-        return web.json_response({"status":"running","mode":"mock-local","phone_connected":False})
+        return web.json_response({"status":"running","mode":"mock-local","phone_transport":"usb-loopback"})
 
     async def receive(request):
         auth(request,"device")
@@ -101,7 +101,7 @@ def create_app(cfg, store, business, *, start_worker=True):
         for task in store.tasks():
             message = json.loads(task["message"])
             rows.append({k:task[k] for k in ("id","status","created","draft","version","error","run_id","upstream_status","usage")} |
-                        {"message":message,"evidence":collect_evidence(store,business,cfg,task)})
+                        {"message":message,"source":"web-demo" if task["device"]=="web-demo" else "phone","evidence":collect_evidence(store,business,cfg,task)})
         return web.json_response({"tasks":rows,"outbox":store.outbox(),"worker":worker.health,"mode":"mock-local"})
 
     async def review(request):

@@ -54,4 +54,13 @@ function decide(observed, rows, anchor, commands, textReplies, boundaryVersion) 
     }
     return {kind:"reply",messageId:messageId,incomingText:incoming.text,sender:incoming.sender,batchSize:batch.length};
 }
-module.exports={MAX_UNREAD:MAX_UNREAD,compact:compact,signature:signature,sameRows:sameRows,decide:decide};
+// Draft height may change the viewport. Require the same unique, fully visible tail
+// after explicitly scrolling to the bottom; any appended row invalidates it.
+function stableTail(rows,anchor) {
+    if(!anchor || !anchor.length || rows.length<anchor.length) return false;
+    var tail=rows.slice(-anchor.length), matches=0;
+    if(!sameRows(tail,anchor) || tail.some(function(r){return !r.simpleText || !r.fullyVisible;})) return false;
+    for(var i=0;i<=rows.length-anchor.length;i++) if(sameRows(rows.slice(i,i+anchor.length),anchor)) matches++;
+    return matches===1;
+}
+module.exports={MAX_UNREAD:MAX_UNREAD,compact:compact,signature:signature,sameRows:sameRows,stableTail:stableTail,decide:decide};

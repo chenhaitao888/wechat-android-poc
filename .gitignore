@@ -32,3 +32,5 @@ __pycache__/
 /backend/.venv/
 /backend/.local/
 /backend/.pytest_cache/
+
+/agent-config.staging.json
