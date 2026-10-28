@@ -22,7 +22,7 @@ ui.layout('<scroll bg="#F4F7F5"><vertical padding="24">' +
     '<text id="detailText" text="" textSize="14sp" textColor="#53645C" marginTop="8" marginBottom="16" />' +
     '<text id="nextText" text="可以发送：@jarvis 普通问题" textSize="19sp" textColor="#163A31" marginBottom="16" />' +
     '<button id="startButton" text="开始固定回执测试（30分钟）" textSize="18sp" h="56" />' +
-    '<button id="agentButton" text="开始智能体联调（USB连接Mac）" textSize="17sp" h="56" marginTop="8" />' +
+    '<button id="agentButton" text="开始智能体联调（30分钟）" textSize="17sp" h="56" marginTop="8" />' +
     '<button id="stopButton" text="停止回复" textSize="18sp" h="56" marginTop="8" />' +
     '<button id="recoverButton" text="检查并恢复" textSize="18sp" h="56" marginTop="8" visibility="gone" />' +
     '<text id="hintText" text="开始前：开启 AutoX 前台服务、无障碍和控件辅助，读完测试1旧消息后返回聊天列表。等准备完成，再真正 @jarvis 发送普通文字。" textSize="15sp" textColor="#53645C" marginTop="16" marginBottom="12" />' +
@@ -136,11 +136,11 @@ function startRun(mode) {
         requireBatteryExemption("AutoX", null);
         if (helper) requireBatteryExemption("微信控件辅助", "local.wechat.accessibilityhelper");
         readState(); // Do not reset unreadable deduplication records.
-        if(mode==="agent") require(BASE+"agent-client.js").config();
+        var agentConfig = mode==="agent" ? require(BASE+"agent-client.js").config() : null;
         files.write(BASE + "run-request.json", JSON.stringify({maxMinutes: 30, mode:mode, source: "phone_panel", requestedAt: new Date().toISOString()}));
         if (files.exists(STOP) && !files.remove(STOP)) throw new Error("无法清除停止标记");
         engines.execScriptFile(WORKER);
-        ui.hintText.setText(mode==="agent" ? "智能体联调已启动。USB保持连接、微信列表可见；问题上报后在Mac审核，通过才会回群。" : "固定回执已启动。请保持微信聊天列表可见，再真正 @jarvis 发送普通文字。");
+        ui.hintText.setText(mode==="agent" ? (agentConfig && agentConfig.baseUrl && agentConfig.baseUrl.indexOf("https://")===0 ? "智能体联调已启动。保持办公网络畅通、微信列表可见；问题上报后在网页审核，通过才会回群。" : "智能体联调已启动。USB保持连接、微信列表可见；问题上报后在Mac审核，通过才会回群。") : "固定回执已启动。请保持微信聊天列表可见，再真正 @jarvis 发送普通文字。");
         app.launchPackage("com.tencent.mm");
     } catch (e) { ui.hintText.setText(String(e.message || e)); }
     finally { setTimeout(function() { busy = false; refresh(); }, 3000); }

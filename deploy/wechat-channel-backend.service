@@ -1,0 +1,28 @@
+[Unit]
+Description=WeChat channel review backend
+After=network-online.target wechat-channel-business.service
+Wants=network-online.target wechat-channel-business.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+# Replace with the account that can read the dedicated Hermes profile.
+User=CHANGE_ME_HERMES_USER
+WorkingDirectory=/opt/wechat-android-poc/backend
+Environment=CHANNEL_DATA_DIR=/var/lib/wechat-channel
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/wechat-android-poc/backend/.venv/bin/python -m channel_backend.server
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/wechat-channel
+
+[Install]
+WantedBy=multi-user.target

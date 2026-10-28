@@ -49,6 +49,7 @@ async function refresh(silent=false) {
     const data=await api("/api/review/list?"+parameters(),undefined,controller.signal);
     if(sequence!==listSequence)return;
     $("login").hidden=true;$("workspace").hidden=false;feedback("login-error","");feedback("error","");sync(true);
+    $("environment-name").textContent=data.phone_transport==="network-https"?"网络联调":"本机联调";$("connection-note").textContent=data.phone_transport==="network-https"?"手机通过办公网络连接":"手机联调需保持 USB 连接";
     clockOffset=data.server_time*1000-Date.now();Object.assign(state,{page:data.page,pages:data.pages,total:data.total,items:data.items,counts:data.counts});
     const groupValue=$("group").value;
     const groupSignature=JSON.stringify(data.groups);

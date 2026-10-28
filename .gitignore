@@ -34,3 +34,6 @@ __pycache__/
 /backend/.pytest_cache/
 
 /agent-config.staging.json
+
+# Office pilot secrets and TLS material
+/deploy/private/

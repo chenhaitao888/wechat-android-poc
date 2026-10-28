@@ -12,10 +12,10 @@
       <div class="brand-mark large" aria-hidden="true">渠</div>
       <p class="eyebrow">渠道助手 · 管理工作台</p><h1>开始审核答案</h1>
       <p class="muted">集中查看群问题，核对业务依据，让每一条回复有据可查。</p>
-      <label for="key">审核凭证</label><input id="key" type="password" autocomplete="off" required placeholder="请输入本机审核凭证">
+      <label for="key">审核凭证</label><input id="key" type="password" autocomplete="off" required placeholder="请输入审核凭证">
       <button id="connect" class="primary" type="submit">进入工作台 <span aria-hidden="true">→</span></button>
       <p id="login-error" class="error-text" role="alert"></p>
-      <p class="login-foot">本机联调环境 · 当前使用模拟业务数据</p>
+      <p class="login-foot">联调环境 · 当前使用模拟业务数据</p>
     </form>
   </section>
   <div id="workspace" class="app-shell" hidden>
@@ -26,7 +26,7 @@
         <button class="nav-item active" id="nav-tasks" aria-current="page"><span data-icon="inbox"></span>答案审核<span class="nav-arrow">›</span></button>
         <button class="nav-item" id="nav-outbox"><span data-icon="send"></span>发件记录<span class="nav-arrow">›</span></button>
       </nav>
-      <div class="sidebar-bottom"><div class="environment"><span class="status-dot"></span> 本机联调 <span class="env-badge">TEST</span></div><p>模拟业务数据 · 人工审核<br>手机联调需保持 USB 连接</p><button id="logout" class="logout"><span data-icon="logout"></span>退出审核</button></div>
+      <div class="sidebar-bottom"><div class="environment"><span class="status-dot"></span><span id="environment-name">本机联调</span><span class="env-badge">TEST</span></div><p>模拟业务数据 · 人工审核<br><span id="connection-note">手机联调需保持 USB 连接</span></p><button id="logout" class="logout"><span data-icon="logout"></span>退出审核</button></div>
     </aside>
     <div class="main-shell">
       <header class="topbar"><div class="breadcrumb">工作空间 <span>/</span> <strong id="breadcrumb-view">答案审核</strong></div><div class="topbar-right"><span id="sync-state" class="sync-state"><span class="status-dot"></span> 正在连接</span><span class="reviewer-avatar" title="本机审核员">审</span><button id="logout-mobile" class="mobile-logout icon-button" aria-label="退出审核" title="退出审核"><span data-icon="logout"></span></button></div></header>

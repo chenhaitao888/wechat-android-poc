@@ -17,7 +17,7 @@ function config() {
     return c;
 }
 function request(c,method,path,body) {
-    if(!/^\/api\/(messages|outbox(?:\/out_[0-9a-f]{32}\/(?:claim|sending|ack))?)$/.test(path)) throw new Error('设备接口路径无效');
+    if(!/^\/api\/(device-info|messages|outbox(?:\/out_[0-9a-f]{32}\/(?:claim|sending|ack))?)$/.test(path)) throw new Error('设备接口路径无效');
     var conn=new java.net.URL(c.baseUrl+path).openConnection(), input=null;
     try {
         conn.setInstanceFollowRedirects(false);conn.setConnectTimeout(3000);conn.setReadTimeout(3000);
@@ -39,8 +39,9 @@ function request(c,method,path,body) {
         return JSON.parse(String(collected.toString('UTF-8')));
     } finally { if(input) input.close();conn.disconnect(); }
 }
+function journalPath(c) { return directory()+(c.backendId ? 'queue-'+c.backendId+'.json' : 'queue.json'); }
 function create(log) {
-    var c=config(), journal=directory()+'queue.json';
+    var c=config(), journal=journalPath(c);
     return bridge.create(c,{
         now:function(){return Date.now();},uuid:function(){return String(java.util.UUID.randomUUID());},event:log,
         load:function(){return files.exists(journal) ? JSON.parse(files.read(journal)) : undefined;},
@@ -48,4 +49,4 @@ function create(log) {
         request:function(method,path,body){return request(c,method,path,body);}
     });
 }
-module.exports={create:create,config:config,atomic:atomic,directory:directory,request:request};
+module.exports={create:create,config:config,atomic:atomic,directory:directory,journalPath:journalPath,request:request};

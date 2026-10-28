@@ -16,6 +16,7 @@ from .business import Business
 from .settings import LOCAL, load
 from .store import Problem, Store
 from .review_query import ReviewQuery
+from .network import access_policy, connection_info
 
 
 def validate_message(body, cfg):
@@ -41,15 +42,21 @@ def validate_message(body, cfg):
 
 def create_app(cfg, store, business, *, start_worker=True):
     worker = Worker(store,business,cfg)
+    access_policy(cfg)  # Reject an invalid deployment before serving.
 
     @web.middleware
     async def boundary(request, handler):
         try:
-            if request.host not in {f"127.0.0.1:{cfg['port']}",f"localhost:{cfg['port']}"}:
-                raise Problem(403,"此联调服务只接受本机地址")
+            allowed_hosts, allowed_origins = access_policy(cfg)
+            if request.host not in allowed_hosts:
+                raise Problem(403,"此地址未配置为允许访问的域名")
             origin = request.headers.get("Origin")
-            if origin and origin not in {f"http://127.0.0.1:{cfg['port']}",f"http://localhost:{cfg['port']}"}:
+            if origin and origin not in allowed_origins:
                 raise Problem(403,"跨站请求被拒绝")
+            if request.host not in {f"127.0.0.1:{cfg['port']}",f"localhost:{cfg['port']}"}:
+                # Only the same-host TLS proxy may attest HTTPS; the application binds loopback.
+                if not request.secure and not (request.remote in {"127.0.0.1","::1"} and request.headers.getall("X-Forwarded-Proto",[])==["https"]):
+                    raise Problem(403,"域名访问必须经过本机 HTTPS 代理")
             response = await handler(request)
         except Problem as exc:
             response = web.json_response({"error":exc.message},status=exc.status)
@@ -79,7 +86,12 @@ def create_app(cfg, store, business, *, start_worker=True):
         return web.FileResponse(Path(__file__).parent/"static"/name)
 
     async def health(request):
-        return web.json_response({"status":"running","mode":"mock-local","phone_transport":"usb-loopback"})
+        return web.json_response({"status":"running","worker":worker.health,**connection_info(cfg)})
+
+    async def device_info(request):
+        auth(request,"device")
+        return web.json_response({"backend_id":cfg.get("backend_id"),"device_id":cfg["device_id"],
+                                  "group_ref":cfg["group_ref"],"group_name":cfg["group_name"],**connection_info(cfg)})
 
     async def receive(request):
         auth(request,"device")
@@ -105,12 +117,12 @@ def create_app(cfg, store, business, *, start_worker=True):
             rows.append({k:task[k] for k in ("id","status","created","draft","version","error","run_id","upstream_status","usage")} |
                         {"message":message,"source":"web-demo" if task["device"]=="web-demo" else "phone","evidence":collect_evidence(store,business,cfg,task),
                          "grounding":next((e for e in store.events(task["id"]) if e.get("event")=="draft.grounded"),None)})
-        return web.json_response({"tasks":rows,"outbox":store.outbox(),"worker":worker.health,"mode":"mock-local"})
+        return web.json_response({"tasks":rows,"outbox":store.outbox(),"worker":worker.health,**connection_info(cfg)})
 
     async def review_list(request):
         auth(request,"review")
         result = ReviewQuery(store).list(request.query)
-        return web.json_response({**result,"worker":worker.health,"mode":"mock-local"})
+        return web.json_response({**result,"worker":worker.health,**connection_info(cfg)})
 
     async def review_detail(request):
         auth(request,"review")
@@ -152,7 +164,7 @@ def create_app(cfg, store, business, *, start_worker=True):
     app = web.Application(middlewares=[boundary],client_max_size=16384)
     app.cleanup_ctx.append(worker_context)
     app.add_routes([web.get("/",static),web.get("/static/{name}",static),web.get("/health",health),
-                    web.post("/api/messages",receive),web.post("/api/demo/messages",demo),
+                    web.get("/api/device-info",device_info),web.post("/api/messages",receive),web.post("/api/demo/messages",demo),
                     web.get("/api/review/tasks",tasks),web.get("/api/review/list",review_list),
                     web.get("/api/review/task/{task_id}",review_detail),web.post("/api/review/{task_id}",review),
                     web.get("/api/outbox",outbox),web.post("/api/outbox/{outbox_id}/{action}",delivery)])

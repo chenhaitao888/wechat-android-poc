@@ -231,6 +231,12 @@ class ApiTests(Fixture,unittest.IsolatedAsyncioTestCase):
         r=await self.client.get('/api/review/tasks',headers={"Authorization":"Bearer "+self.cfg["device_key"]});self.assertEqual(r.status,401)
         r=await self.client.get('/api/review/tasks',headers={"Authorization":"Bearer "+self.cfg["review_key"],"Origin":"https://evil.example"});self.assertEqual(r.status,403)
         r=await self.client.get('/api/outbox',headers={"Authorization":"Bearer "+self.cfg["review_key"]});self.assertEqual(r.status,401)
+        r=await self.client.get('/api/device-info',headers={"Authorization":"Bearer "+self.cfg["review_key"]});self.assertEqual(r.status,401)
+        r=await self.client.get('/api/device-info',headers={"Authorization":"Bearer "+self.cfg["device_key"]})
+        self.assertEqual(r.status,200);info=await r.json()
+        self.assertEqual(info["device_id"],self.cfg["device_id"])
+        self.assertEqual(info["phone_transport"],"usb-loopback")
+        for field in ("review_key","device_key","biz_key","hermes_key"):self.assertNotIn(self.cfg[field],json.dumps(info))
 
     async def test_receive_replay_over_http(self):
         h={"Authorization":"Bearer "+self.cfg["device_key"]};m=self.message()

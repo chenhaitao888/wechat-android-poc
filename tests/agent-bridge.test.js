@@ -105,3 +105,30 @@ test('one sending callback cannot mark two clicks',()=>{
     const f=host();const b=queued(f);f.approve();b.sync();
     assert.throws(()=>b.deliver(b.next(),(_,mark)=>{mark();mark();return true;}),/不能再次点击/);assert.equal(f.outbox[0].status,'send_uncertain');
 });
+
+test('HTTPS requires a valid DNS origin and server identity; no plaintext remote or URL secrets',()=>{
+    const net={...cfg,baseUrl:'https://bot.company.example',backendId:'backend_'+'1'.repeat(32)};
+    assert.ok(validConfig(net));assert.ok(validConfig({...net,baseUrl:'https://bot.company.example:8443'}));
+    for(const baseUrl of ['http://bot.company.example','https://user:pass@bot.company.example','https://127.0.0.1','https://[::1]','https://a..example','https://-x.example','https://x-.example','https://bot.company.example/','https://bot.company.example/path','https://bot.company.example?token=foo','https://bot.company.example#key=foo','https://bot.company.example:65536','https://bot.company.example:0443'])assert.ok(!validConfig({...net,baseUrl}),baseUrl);
+    assert.ok(!validConfig({...net,backendId:undefined}));
+});
+test('network journal cannot be reused by another backend and failed requests retain events',()=>{
+    const net={...cfg,baseUrl:'https://bot.company.example',backendId:'backend_'+'1'.repeat(32)};
+    const f=host();f.flags({offline:true});let b=create(net,f.h);b.enqueue('text-1','A123卡点','tester');b.sync();
+    assert.match(b.summary().error,/办公网络/);assert.equal(b.summary().queued,1);
+    const saved=f.read();assert.equal(saved.backendId,net.backendId);
+    assert.throws(()=>create({...net,backendId:'backend_'+'2'.repeat(32)},f.h));assert.deepEqual(f.read(),saved);
+    f.flags({offline:false});b=create(net,f.h);b.sync();assert.equal(b.summary().accepted,1);assert.equal(f.tasks.size,1);
+});
+test('backend switch must be explicit and cannot strand an unsent question or an unacknowledged result',()=>{
+    const {configurationChange}=require('../agent-bridge');
+    const net={...cfg,baseUrl:'https://bot.company.example',backendId:'backend_'+'1'.repeat(32)};
+    assert.equal(configurationChange(cfg,{...cfg},undefined,false),false);
+    assert.throws(()=>configurationChange(cfg,net,undefined,false));
+    assert.equal(configurationChange(cfg,net,undefined,true),true);
+    const f=host();f.flags({offline:true});let b=queued(f);assert.throws(()=>configurationChange(cfg,net,f.read(),true),/待上报/);
+    f.flags({offline:false});b.sync();assert.equal(configurationChange(cfg,net,f.read(),true),true);
+    f.approve();b.sync();f.flags({loseAck:true});b.deliver(b.next(),(_,mark)=>{mark();return true;});
+    assert.throws(()=>configurationChange(cfg,net,f.read(),true),/待核查/);
+    b.sync();assert.equal(configurationChange(cfg,net,f.read(),true),true);
+});

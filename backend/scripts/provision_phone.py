@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from channel_backend.settings import ROOT, LOCAL, load
+from channel_backend.network import device_config, validate_device_config
 
 REMOTE = "/sdcard/wechat-android-poc/"
 SCRIPTS = ["watch-test-group.js", "phone-panel.js", "open-phone-panel.js", "mention-policy.js",
@@ -17,11 +18,12 @@ SCRIPTS = ["watch-test-group.js", "phone-panel.js", "open-phone-panel.js", "ment
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--serial", required=True)
+    parser.add_argument("--config-file",type=Path,help="Device-only config exported from the target backend")
+    parser.add_argument("--switch-backend",action="store_true",help="Archive old connection; retain its queue; old server tasks do not migrate")
     args = parser.parse_args()
     os.umask(0o077)
-    cfg = load()
-    if cfg["port"] != 8660 or cfg["group_ref"] != "test-1" or cfg["group_name"] != "测试1":
-        raise SystemExit("This USB test deployment is restricted to localhost:8660 / 测试1")
+    settings=validate_device_config(json.loads(args.config_file.read_text())) if args.config_file else device_config(load())
+    LOCAL.mkdir(parents=True,exist_ok=True)
 
     def adb(*parts, check=True):
         return subprocess.run(["adb", "-s", args.serial, *parts], check=check, capture_output=True, text=True)
@@ -39,12 +41,11 @@ def main():
             adb("pull", REMOTE+name, str(backup/Path(name).name))
     for name in SCRIPTS:
         adb("push", str(ROOT.parent/name), REMOTE+name)
-    adb("reverse", "tcp:8660", "tcp:8660")
-    settings = {"version":1, "baseUrl":"http://127.0.0.1:8660", "deviceKey":cfg["device_key"],
-                "deviceId":cfg["device_id"], "groupRef":cfg["group_ref"], "groupName":cfg["group_name"]}
+    if settings["baseUrl"]=="http://127.0.0.1:8660":
+        adb("reverse", "tcp:8660", "tcp:8660")
     staging = LOCAL / "phone-config.staging.json"
     try:
-        staging.write_text(json.dumps(settings,ensure_ascii=False))
+        staging.write_text(json.dumps({"config":settings,"switchBackend":args.switch_backend},ensure_ascii=False))
         staging.chmod(0o600)
         adb("push", str(staging), REMOTE+"agent-config.staging.json")
         began = time.time()

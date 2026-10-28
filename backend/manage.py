@@ -37,7 +37,8 @@ def main():
     if args.action=="open":
         if not port_open(cfg["port"]):raise SystemExit("Run manage.py start first")
         # Fragment never reaches HTTP logs; UI immediately removes it and keeps key only in sessionStorage.
-        webbrowser.open(f"http://127.0.0.1:{cfg['port']}/#key={cfg['review_key']}")
+        origin=cfg.get("public_url") or f"http://127.0.0.1:{cfg['port']}"
+        webbrowser.open(f"{origin}/#key={cfg['review_key']}")
         print("Opened local review page; credential not printed.")
         return
     if args.action=="stop":

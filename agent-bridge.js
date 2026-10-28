@@ -1,12 +1,24 @@
 // Durable device queue and one-attempt delivery. No Android/UI globals in this module.
+function transport(url) {
+    if(url==='http://127.0.0.1:8660') return 'usb-loopback';
+    if(typeof url!=='string') return null;
+    var match=/^https:\/\/([a-z0-9.-]+)(?::([1-9][0-9]{0,4}))?$/.exec(url);
+    if(!match || match[1].length>253 || (match[2] && Number(match[2])>65535)) return null;
+    var labels=match[1].split('.');
+    if(labels.length<2 || !/[a-z]/.test(labels[labels.length-1]) || !labels.every(function(label){return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label);})) return null;
+    return 'network-https';
+}
 function validConfig(c) {
-    return c && c.version===1 && c.baseUrl==='http://127.0.0.1:8660' &&
+    var mode=c && transport(c.baseUrl);
+    return c && c.version===1 && !!mode &&
+        (mode!=='network-https' || /^backend_[0-9a-f]{32}$/.test(c.backendId||'')) &&
+        (c.backendId===undefined || /^backend_[0-9a-f]{32}$/.test(c.backendId)) &&
         typeof c.deviceKey==='string' && /^[A-Za-z0-9_-]{32,200}$/.test(c.deviceKey) &&
         c.groupRef==='test-1' && c.groupName==='测试1' && typeof c.deviceId==='string' && !!c.deviceId;
 }
 function object(v) { return v && typeof v==='object' && !Array.isArray(v); }
 function validJournal(j,c) {
-    if(!object(j) || j.version!==1 || j.deviceId!==c.deviceId || j.groupRef!==c.groupRef || !object(j.messages) || !object(j.deliveries)) return false;
+    if(!object(j) || j.version!==1 || j.deviceId!==c.deviceId || j.groupRef!==c.groupRef || j.backendId!==c.backendId || !object(j.messages) || !object(j.deliveries)) return false;
     return Object.keys(j.messages).every(function(k) {
         var m=j.messages[k];
         return object(m) && object(m.body) && m.body.local_receipt_id===k &&
@@ -22,15 +34,29 @@ function validJournal(j,c) {
             (!d.outcome || ['outgoing_observed','not_sent','send_uncertain'].indexOf(d.outcome)>=0);
     });
 }
+function configurationChange(current,next,journal,allowSwitch) {
+    if(!validConfig(next)) throw new Error('新配置无效');
+    if(!current) return false;
+    if(!validConfig(current)) throw new Error('旧配置无效，请先检查');
+    var keys=Object.keys(current).concat(Object.keys(next));
+    if(keys.every(function(k){return current[k]===next[k];})) return false;
+    if(!allowSwitch) throw new Error('已有不同配置，需要明确切换后台');
+    if(journal!==undefined) {
+        if(!validJournal(journal,current)) throw new Error('旧队列异常，请先检查');
+        if(Object.keys(journal.messages).some(function(k){return journal.messages[k].status==='queued';})) throw new Error('还有问题待上报，不能切换后台');
+        if(Object.keys(journal.deliveries).some(function(k){return !journal.deliveries[k].acked;})) throw new Error('还有发送结果待核查，不能切换后台');
+    }
+    return true;
+}
 function create(c,host) {
     if(!validConfig(c)) throw new Error('智能体连接配置无效，请保持停止并检查。');
     var loaded=host.load();
-    var j=loaded===undefined ? {version:1,deviceId:c.deviceId,groupRef:c.groupRef,messages:{},deliveries:{}} : loaded;
+    var j=loaded===undefined ? {version:1,deviceId:c.deviceId,groupRef:c.groupRef,backendId:c.backendId,messages:{},deliveries:{}} : loaded;
     if(!validJournal(j,c)) throw new Error('智能体队列损坏或设备不匹配，不能清空后重试。');
     var lastError='', items=[];
     function save() { host.save(j); }
     function stamp() { return new Date(host.now()).toISOString(); }
-    function failure(e) { lastError=e && e.status ? 'HTTP '+e.status : '连接失败，请检查 USB 和 Mac 后端'; }
+    function failure(e) { lastError=e && e.status ? 'HTTP '+e.status : (transport(c.baseUrl)==='network-https' ? '连接失败，请检查办公网络和服务器' : '连接失败，请检查 USB 和 Mac 后端'); }
     function log(type,detail) { if(host.event) host.event(type,detail); }
     function result(d,outcome,reason) {
         d.outcome=outcome;d.phase='finished';d.evidence=JSON.stringify({attempt:d.attemptId,at:stamp(),observation:reason});save();
@@ -146,4 +172,4 @@ function create(c,host) {
     }
     return {enqueue:enqueue,sync:sync,next:next,deliver:deliver,summary:summary};
 }
-module.exports={create:create,validConfig:validConfig,validJournal:validJournal};
+module.exports={create:create,validConfig:validConfig,validJournal:validJournal,transport:transport,configurationChange:configurationChange};
