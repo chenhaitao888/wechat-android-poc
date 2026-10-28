@@ -105,6 +105,7 @@ function renderEvidence(e){
   const r=e.result||{};
   if(!r.ok)card.append(el("p",r.message||"未取得有效业务信息","muted"));
   else if(e.tool==="query_order"){const facts=el("dl",undefined,"facts");for(const [label,value]of[["当前状态",r.status],["当前环节",r.step],["资料要求",r.required],["记录时间",r.updated_at]]){facts.append(el("dt",label),el("dd",value||"未提供"));}card.append(facts);}
+  else if(r.live){card.append(el("pre",String(r.result||"").slice(0,1500)+(String(r.result||"").length>1500?"\n…":""),"live-result"));if(r.truncated)card.append(el("p","工具结果已截断；当前记录不是完整结果。","muted"));}
   else if(Array.isArray(r.nodes)){const list=el("ol",undefined,"trace-list");for(const node of r.nodes){const li=el("li",node.node);li.append(el("small",node.status));if(node.action)li.append(el("p",node.action));list.append(li);}card.append(list);}
   const raw=el("details",undefined,"raw-details");raw.append(el("summary","查看原始记录与审计编号"),el("pre",JSON.stringify(r,null,2)),el("p",e.id+" · "+e.tool_call_id,"detail-id"));card.append(raw);return card;
 }
@@ -115,7 +116,7 @@ function renderDetail(t){
   if(t.error){const alert=el("p",t.error,"error-banner");body.append(alert);}
   const answerSection=section(t.outbox?"已审核答案":"回复草稿","send",t.outbox?"审核版本 v"+t.outbox.reply_version:"草稿 v"+t.version);
   if(t.draft){
-    if(t.grounding)answerSection.append(el("p","草稿按订单与流程记录生成。具体原因和处理时限未核实；手工修改后请重新核对业务依据。","grounding-note"));
+    if(t.grounding)answerSection.append(el("p",t.grounding.schema==="answer_draft.v1"?"草稿由智能体依据下方本轮工具结果撰写；后台已核对依据归属，并检查部分敏感格式。答案事实和敏感信息仍需你逐条核对。":"草稿按订单与流程记录生成。具体原因和处理时限未核实；手工修改后请重新核对业务依据。","grounding-note"));
     const answer=el("textarea",undefined,"answer"+(reviewable(t)?"":" readonly"));answer.id="review-answer";answer.setAttribute("aria-label",t.outbox?"已审核答案":"回复草稿");answer.readOnly=!reviewable(t);
     const edit=edits.get(t.id);answer.value=edit?.version===t.version&&!t.outbox?edit.text:(t.outbox?.text||t.draft);
     const info=el("div",undefined,"answer-info");const hint=el("span",t.outbox?"已保存的确定版本":edit?"本页已保留修改":"核对后可在此修改答案");const count=el("span");count.id="answer-count";const updateCount=()=>{const n=Array.from(answer.value).length;count.textContent=n+" / 500 字";const approve=$("approve");if(approve)approve.disabled=state.reviewing||!answer.value.trim()||n>500||!reviewable(t);};

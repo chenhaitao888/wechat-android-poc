@@ -14,7 +14,8 @@ cfg=load_config()
 register_mcp_servers(cfg.get("mcp_servers",{}))
 sets=sorted(_get_platform_tools(cfg,"api_server"))
 names=sorted(t["function"]["name"] for t in get_tool_definitions(enabled_toolsets=sets,quiet_mode=True))
-expected=["mcp__biz__query_order","mcp__biz__query_trace"]
+# verify_profile passes the allowlist for the configured mode; default is the mock pair.
+expected=sorted(json.loads(os.environ.get("CHANNEL_EXPECTED_TOOLS",'["mcp__biz__query_order","mcp__biz__query_trace"]')))
 assert names==expected,(sets,names)
 skills=find_all_skills(skip_disabled=False)
 skill_names=sorted(s["name"] for s in skills)

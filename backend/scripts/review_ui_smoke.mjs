@@ -55,6 +55,20 @@ try{
   await page.locator('.question-link').first().click();await page.locator('#review-answer').waitFor();assert.ok(await page.evaluate(()=>document.querySelector('#detail').getBoundingClientRect().width<=innerWidth));await page.screenshot({path:output+'mobile-detail.png',fullPage:true});await page.keyboard.press('Escape');check('tablet, phone layout and keyboard close');
   await page.setViewportSize({width:1440,height:1000});await page.locator('#new-demo').click();await page.locator('#question').fill('订单 A124 目前是什么状态？');
   sent=page.waitForResponse(r=>r.url().endsWith('/api/demo/messages')&&r.request().method()==='POST');await page.locator('#demo-submit').click();assert.equal((await sent).status(),202);await page.locator('#detail-eyebrow').filter({hasText:'网页模拟'}).waitFor();await page.locator('#close-detail').click();check('demo form remains separate from phone delivery');
+  await page.route('**/api/review/task/*',async route=>{
+    const response=await route.fetch();const task=await response.json();
+    task.status='draft_ready';task.reviewable=true;task.draft='待核对的业务答案';task.grounding={schema:'answer_draft.v1'};
+    task.evidence=[{tool:'code_find_nodes',order_id:JSON.stringify({service:'Service'+ 'x'.repeat(95),keyword:'Order'}),id:'audit_fixture',tool_call_id:'call_fixture',result:{live:true,ok:true,truncated:true,result:'<img src=x onerror="window.liveInjection=true">'+ 'code'.repeat(1600)}}];
+    await route.fulfill({response,json:task});
+  });
+  await page.setViewportSize({width:390,height:900});await page.locator('.question-link').first().click();
+  await page.locator('.live-result').waitFor();assert.match(await page.locator('#detail-body').innerText(),/工具结果已截断/);
+  assert.match(await page.locator('.grounding-note').innerText(),/答案事实和敏感信息仍需/);
+  assert.equal(await page.locator('.live-result img').count(),0);assert.equal(await page.evaluate(()=>window.liveInjection),undefined);
+  assert.ok(await page.evaluate(()=>{const body=document.querySelector('#detail-body');return body.scrollWidth<=body.clientWidth;}),'live evidence overflows mobile drawer');
+  await page.screenshot({path:output+'live-evidence-mobile.png',fullPage:true});await page.locator('#close-detail').click();
+  await page.unroute('**/api/review/task/*');check('live evidence escapes markup, flags truncation and fits mobile detail');
+  await page.setViewportSize({width:1440,height:1000});
   await page.locator('#logout').click();await page.locator('#login').waitFor();assert.equal(await page.evaluate(()=>sessionStorage.getItem('review-key')),null);assert.equal(await page.locator('#workspace').isVisible(),false);check('logout clears access');
   assert.deepEqual(errors,[]);fs.writeFileSync(output+'acceptance.json',JSON.stringify({checks,browserErrors:errors,screenshots:output},null,2)+'\n');
 }catch(e){await page.screenshot({path:output+'failure.png',fullPage:true});console.error(e);console.error((await page.locator('body').innerText()).slice(-3500));process.exitCode=1;}finally{await browser.close();}

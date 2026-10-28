@@ -59,6 +59,22 @@ class Business:
                 json.dumps(result, ensure_ascii=False), int((time.monotonic()-start)*1000)))
         return result
 
+    def record_live(self, channel, tool, args, ok, text, error, duration_ms, *, truncated=False):
+        """Audit one live upstream call. order_id holds the canonical arguments so the worker can match the model's call."""
+        from .tools import canonical
+        audit_id = "audit_"+uuid.uuid4().hex
+        result = {"audit_id": audit_id, "live": True, "ok": bool(ok), "result": text}
+        if truncated:
+            result["truncated"] = True
+        if error:
+            result["error"] = error
+            result["message"] = error
+        with self.connect() as db:
+            db.execute("INSERT INTO audit VALUES (?,?,?,?,?,?,?)", (
+                audit_id, time.time(), channel, tool, canonical(args) if isinstance(args, dict) else "<invalid>",
+                json.dumps(result, ensure_ascii=False), int(duration_ms)))
+        return audit_id
+
     def get(self, audit_id, channel):
         with self.connect() as db:
             row = db.execute("SELECT * FROM audit WHERE id=? AND channel=?", (audit_id, channel)).fetchone()

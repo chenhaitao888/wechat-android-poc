@@ -17,3 +17,5 @@ dialog{color:var(--ink);border:0;padding:0;box-shadow:var(--shadow)}dialog::back
 @media(max-width:760px){.tab{font-size:11px}.row-meta{font-size:10px}.detail-meta{font-size:11px}}
 
 .mobile-logout{display:none}@media(max-width:760px){.mobile-logout{display:inline-flex;padding:4px}.mobile-logout .icon{width:15px;height:15px}.topbar-right{gap:10px}}
+
+.live-result{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.8 ui-monospace,monospace;max-height:320px;overflow:auto}.evidence-heading>span{min-width:0;overflow-wrap:anywhere}.evidence-heading small{flex-shrink:0}

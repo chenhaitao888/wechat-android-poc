@@ -8,6 +8,7 @@ import uvicorn
 
 from .business import Business
 from .settings import LOCAL, load
+from .tools import TOOLS, enabled, input_schema
 
 
 def create_app(cfg, audit_path):
@@ -26,7 +27,34 @@ def create_app(cfg, audit_path):
         return business.query(cfg["channel_id"], "query_trace", order_id)
 
     inner = mcp.streamable_http_app(json_response=True, stateless_http=True, max_request_body_size=16384)
+    return guarded(cfg, inner)
 
+
+def create_live_app(cfg, audit_path, upstreams=None):
+    """Same endpoint and credential as mock mode, but tools forward to fixed upstream tools via the gateway."""
+    from mcp import types
+    from mcp.server import Server
+    from .gateway import Gateway, Upstreams, load_upstreams
+    gateway = Gateway(cfg, Business(audit_path), upstreams or Upstreams(load_upstreams()))
+    annotations = types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
+    listed = [types.Tool(name=n, description=TOOLS[n]["description"], input_schema=input_schema(n), annotations=annotations)
+              for n in sorted(gateway.names)]
+
+    async def list_tools(ctx, params):
+        return types.ListToolsResult(tools=listed)
+
+    async def call_tool(ctx, params):
+        payload = await gateway.call(params.name, params.arguments or {})
+        return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))], is_error=False)
+
+    server = Server("channel-live-business", version="0.2.0",
+                    instructions="只读查询；每次调用都有审计编号，参数按白名单校验。",
+                    on_list_tools=list_tools, on_call_tool=call_tool)
+    inner = server.streamable_http_app(json_response=True, stateless_http=True, max_request_body_size=16384)
+    return guarded(cfg, inner)
+
+
+def guarded(cfg, inner):
     async def app(scope, receive, send):
         if scope["type"] == "http":
             values = [v for k,v in scope.get("headers", []) if k.lower() == b"authorization"]
@@ -43,4 +71,5 @@ def create_app(cfg, audit_path):
 if __name__ == "__main__":
     os.umask(0o077)
     cfg = load()
-    uvicorn.run(create_app(cfg, LOCAL / "audit.sqlite3"), host="127.0.0.1", port=cfg["mcp_port"], access_log=False)
+    factory = create_app if enabled(cfg) is None else create_live_app
+    uvicorn.run(factory(cfg, LOCAL / "audit.sqlite3"), host="127.0.0.1", port=cfg["mcp_port"], access_log=False)

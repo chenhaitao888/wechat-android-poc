@@ -4,10 +4,12 @@ import os
 import subprocess
 from pathlib import Path
 from channel_backend.settings import load,ROOT,LOCAL
+from channel_backend.agent import allowed_tools
 
 cfg=load()
 env=os.environ.copy()
 env["HERMES_HOME"]=cfg["profile"]
+env["CHANNEL_EXPECTED_TOOLS"]=json.dumps(sorted(allowed_tools(cfg)))
 # Official launcher resolves the PM-managed Python/dependency generation; no raw pip/uv changes.
 cmd=json.loads(subprocess.check_output(["hermes","--print-runtime-command","--module","contextlib"],env=env,text=True))
 cmd[3] += "; runpy.run_path("+repr(str(ROOT/"scripts/inspect_hermes.py"))+", run_name=\"__main__\")"

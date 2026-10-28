@@ -92,3 +92,67 @@ def render(output, evidence, question):
                        "query_order.updated_at", "query_trace.nodes[].node", "query_trace.nodes[].status"],
              "unverified":["具体原因", "处理时限"]}
     return draft, proof
+
+
+LIVE_SCHEMA = "answer_draft.v1"
+AUDIT = re.compile(r"audit_[0-9a-f]{32}")
+# Askers may be external channel staff: internal identifiers or personal data in a draft send it to a human.
+LEAKS = [
+    (re.compile(r"https?://", re.I), "链接"),
+    (re.compile(r"</?[A-Za-z][^>]{0,40}>"), "HTML标记"),
+    (re.compile(r"(?<![\w/])[A-Za-z][\w-]*(?:/[\w.-]+){2,}"), "路径"),
+    (re.compile(r"\.(?:java|kt|py|js|ts|xml|yml|yaml|sql)\b", re.I), "源文件"),
+    (re.compile(r"\b[a-z][a-z0-9]*(?:[A-Z][a-z0-9]+){2,}\b|\b(?:[A-Z][a-z0-9]+){3,}\b"), "类名或方法名"),
+    (re.compile(r"\b[A-Za-z_]\w*(?:\.\w+)+\("), "代码调用"),
+    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "手机号"),
+    (re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{16,}\b", re.I), "内部编号"),
+    (re.compile(r"\b(?:App|Service)[A-Z]\w+"), "服务名"),
+]
+
+
+def parse_live(output):
+    try:
+        if not isinstance(output, str) or len(output) > 4000:
+            raise ValueError()
+        data = json.loads(output, object_pairs_hook=unique_pairs)
+        if not isinstance(data, dict):
+            raise ValueError()
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("智能体未返回可核验的答案结构，转人工") from exc
+    if set(data) == {"schema", "reason"} and data.get("schema") == "needs_human.v1" and isinstance(data.get("reason"), str):
+        reasons = {"missing_order_id": "缺少订单号", "multiple_orders": "一次只处理一个订单",
+                   "tool_failed": "查询失败或无权限", "unsupported_question": "问题超出当前答疑范围"}
+        raise RuntimeError(reasons.get(data["reason"], "无法核实依据")+"，转人工")
+    if set(data) != {"schema", "answer", "audit_ids"} or data.get("schema") != LIVE_SCHEMA:
+        raise RuntimeError("智能体返回了未允许的字段，转人工")
+    answer, ids = data["answer"], data["audit_ids"]
+    if not isinstance(answer, str) or not answer.strip() or len(answer) > 400 or any(ord(c) < 32 and c != "\n" for c in answer):
+        raise RuntimeError("答案为空、过长或含控制字符，转人工")
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 10 or not all(isinstance(i, str) and AUDIT.fullmatch(i) for i in ids) \
+            or len(set(ids)) != len(ids):
+        raise RuntimeError("答案未引用有效的工具依据，转人工")
+    return {"answer": answer.strip(), "audit_ids": ids}
+
+
+def leaks(text):
+    return sorted({label for pattern, label in LEAKS if pattern.search(text)})
+
+
+def render_live(output, evidence):
+    selected = parse_live(output)
+    records = {e["id"]: e for e in evidence}
+    cited = [records.get(i) for i in selected["audit_ids"]]
+    if not all(cited):
+        raise RuntimeError("答案引用了不属于本轮的依据编号，转人工")
+    if not all(c["result"].get("ok") is True and c["result"].get("live") is True for c in cited):
+        raise RuntimeError("答案引用了失败或非实时的工具结果，转人工")
+    found = leaks(selected["answer"])
+    if found:
+        raise RuntimeError("答案含内部或个人信息（"+"、".join(found)+"），转人工")
+    draft = selected["answer"]
+    if len(draft) > 500:
+        raise RuntimeError("答案超过回群长度限制")
+    proof = {"schema": LIVE_SCHEMA, "audit_ids": selected["audit_ids"],
+             "tools": sorted({c["tool"] for c in cited}), "checked": ["依据属于本轮且成功", "通过已配置的敏感格式检查"],
+             "unverified": ["答案事实、措辞及是否含敏感信息，仍需审核人核对"]}
+    return draft, proof

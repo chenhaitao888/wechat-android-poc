@@ -1,5 +1,5 @@
 [Unit]
-Description=WeChat channel read-only mock business tools
+Description=WeChat channel business tools (mock or live audit gateway)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
