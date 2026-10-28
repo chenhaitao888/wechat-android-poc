@@ -42,6 +42,29 @@ uv sync --frozen
 
 审核时核对问题、业务依据和草稿，可修改后通过或驳回。未审核、缺少工具依据、工具失败、过期及运行状态不明的任务不能自动入箱。审批后版本不可覆盖；发件结果不确定也不自动重投。首轮不实现撤销重审或自动重试 `not_sent`，需人工核查。
 
+## 列表审核工作台（2026-10-28）
+
+- **答案审核**：按全部、待审核、生成中、已审核、需关注切换。关键词可查问题、提问人及编号，还可组合来源、群聊、时间范围筛选；统计随筛选条件更新。
+- **后台分页**：每页 10 / 20 / 50 条，支持最新或最早在前，历史记录不受旧接口最近 100 条限制。列表不加载完整工具审计，打开详情时才读取。
+- **右侧详情**：展示完整问题、可读的订单/流程依据、原始审计记录和草稿。修改内容在本页内保留，刷新列表、关闭再打开详情不会丢失；重新加载整个页面会清空未提交的修改。
+- **发件记录**：展示审核确定版本和发送状态；“已观察到发出”表示手机观察到发送气泡，不代表对方已读。网页模拟始终单独标注。
+- 草稿超过 30 分钟列入“需关注”，详情只读；过期发件项也标为已过期。上述为只读展示，不修改历史状态或触发重发。仍逐条人工审核。
+- “模拟提问”移到右上角弹窗；登录和已有审核凭证方式保持一致。自动更新间隔为 5 秒，详情编辑内容不会被轮询覆盖。
+
+新增审核只读接口：`GET /api/review/list` 与 `GET /api/review/task/{task_id}`。列表参数为 `view=tasks|outbox`、`category`、`source=all|phone|web-demo`、`group`、`q`、`since`（Unix 秒）、`sort=newest|oldest`、`page`、`page_size=10|20|50`。它们使用审核凭证；设备 API 不变。旧 `/api/review/tasks` 为兼容诊断脚本保留。
+
+独立浏览器回归（临时数据库、无 Hermes 任务、无手机投递）：
+
+```sh
+# 终端一，按 Ctrl-C 关闭并清理临时数据库
+.venv/bin/python -m tests.review_ui_fixture
+# 终端二，需要已有 Playwright 和 Chrome；不依赖本机联调凭证
+node scripts/review_ui_smoke.mjs
+# 可用 PLAYWRIGHT_MODULE 指定已有 Playwright index.mjs，CHROME_PATH 指定浏览器
+```
+
+测试服务仅监听 `127.0.0.1:8661`。浏览器脚本固定访问该端口和临时测试凭证，截图及结果写入已忽略的 `.local/review-ui/`。无需把浏览器测试数据写入当前业务数据库。
+
 ## 初次安装（其他机器）
 
 1. 安装并固定 Hermes v0.22.5，本轮实测提交 `bf0203a794a0`。
@@ -69,6 +92,7 @@ uv sync --frozen
 - `channel_backend/grounding.py`：单订单结构化依据校验和字段草稿生成；模型额外自由说明、错误依据或矛盾数据转人工。
 - `channel_backend/agent.py`：持久化任务恢复、Runs轮询与事件、证据关联、超时停止。
 - `channel_backend/business.py`、`mcp_server.py`：两个只读模拟工具。授权渠道由服务端凭证绑定；不存在和越权不返回业务字段。
+- `channel_backend/review_query.py`：审核列表的只读搜索、分类统计与分页。
 - `channel_backend/server.py`、`static/`：本机审核页面、审核和设备分权接口、跨站与Host检查。
 - `configure.py`、`manage.py`：专用配置初始化、服务启停、审核页打开。
 - `scripts/verify_profile.py`：实际工具/技能核验；需要同机 Hermes 官方源码安装。

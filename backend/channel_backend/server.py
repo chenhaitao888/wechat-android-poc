@@ -4,6 +4,7 @@ import fcntl
 import hmac
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from .agent import Worker, collect_evidence
 from .business import Business
 from .settings import LOCAL, load
 from .store import Problem, Store
+from .review_query import ReviewQuery
 
 
 def validate_message(body, cfg):
@@ -105,6 +107,23 @@ def create_app(cfg, store, business, *, start_worker=True):
                          "grounding":next((e for e in store.events(task["id"]) if e.get("event")=="draft.grounded"),None)})
         return web.json_response({"tasks":rows,"outbox":store.outbox(),"worker":worker.health,"mode":"mock-local"})
 
+    async def review_list(request):
+        auth(request,"review")
+        result = ReviewQuery(store).list(request.query)
+        return web.json_response({**result,"worker":worker.health,"mode":"mock-local"})
+
+    async def review_detail(request):
+        auth(request,"review")
+        task = store.get(request.match_info["task_id"])
+        now = time.time()
+        result = {k:task[k] for k in ("id","status","created","updated","draft","version","error")}
+        result.update(message=json.loads(task["message"]), source="web-demo" if task["device"]=="web-demo" else "phone",
+                      evidence=collect_evidence(store,business,cfg,task),
+                      grounding=next((e for e in store.events(task["id"]) if e.get("event")=="draft.grounded"),None),
+                      outbox=ReviewQuery(store).delivery_for(task["id"]), server_time=now,
+                      reviewable=task["status"]=="draft_ready" and now-task["created"]<1800)
+        return web.json_response(result)
+
     async def review(request):
         auth(request,"review")
         data = await body(request)
@@ -134,7 +153,8 @@ def create_app(cfg, store, business, *, start_worker=True):
     app.cleanup_ctx.append(worker_context)
     app.add_routes([web.get("/",static),web.get("/static/{name}",static),web.get("/health",health),
                     web.post("/api/messages",receive),web.post("/api/demo/messages",demo),
-                    web.get("/api/review/tasks",tasks),web.post("/api/review/{task_id}",review),
+                    web.get("/api/review/tasks",tasks),web.get("/api/review/list",review_list),
+                    web.get("/api/review/task/{task_id}",review_detail),web.post("/api/review/{task_id}",review),
                     web.get("/api/outbox",outbox),web.post("/api/outbox/{outbox_id}/{action}",delivery)])
     return app
 
