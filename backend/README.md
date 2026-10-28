@@ -69,7 +69,7 @@ node scripts/review_ui_smoke.mjs
 
 ## ECS 办公网试点准备
 
-已加入可配置 HTTPS 域名、Host/Origin 校验、设备配置导出和手机后台队列隔离。目标为 Ubuntu 22.04.5 宿主机部署，沿用宿主机 Hermes；部署步骤、待确认项和两个系统服务模板见 [部署说明](../deploy/README.md)。未部署到 ECS，手机仍使用 Mac USB 模式。
+已加入可配置 HTTPS 域名、Host/Origin 校验、设备配置导出和手机后台队列隔离。目标为 Ubuntu 22.04.5 宿主机部署，沿用宿主机 Hermes 和公司已有的订单/代码工具或 MCP，不新增本项目的 8650 模拟服务。当前初始化、工具白名单、依据校验和系统服务依赖仍需适配；见 [正式接入交接](../deploy/README.md)。现有模拟环境操作另见 [模拟联调部署参考](../deploy/模拟联调部署.md)。未部署到 ECS，手机仍使用 Mac USB 模式。
 
 ## 初次安装（其他机器）
 
