@@ -113,3 +113,34 @@ test('stable tail requires a unique complete anchor and rejects appended or hidd
     assert.equal(stableTail([b,c,b,c],[b,c]),false);
     assert.equal(stableTail([b,{...c,fullyVisible:false}],[b,c]),false);
 });
+
+
+test('observed Xiaomi ellipsis accepts a full recovered question, never the abbreviated preview',()=>{
+    const row=incoming('@jarvis\u2005订单A123卡在哪一步？需要补充哪些资料？','你们就偷着乐吧');
+    const preview='[有人@我] 你们就偷着乐吧: @jarvis\u2005订单A123卡在…';
+    const result=classifyText([row],{},11,{preview});
+    assert.equal(result.kind,'reply');assert.equal(result.incomingText,row.text);
+    assert.equal(policy.previewMatch(preview.replace(/^\[有人@我\] /,''),row),'truncated');
+});
+test('ellipsis requires complete sender and meaningful matching body, not a changed or invented suffix',()=>{
+    const row=incoming('@jarvis 订单A123卡在哪一步？');
+    for(const preview of ['tester: @jarvis 订单B999卡在…','other: @jarvis 订单A123卡在…',
+        'test…','tester: @jarvis…','tester: @jarvis 订…','tester: @jarvis 订单A123卡在',
+        'tester: @jarvis 订单A123卡在...','tester: @jarvis 订单A123卡在哪一步？…']) {
+        assert.equal(classifyText([row],{},1,{preview:'[有人@我] '+preview}).kind,'pause',preview);
+    }
+});
+test('truncated previews retain unread-boundary, visibility, duplicate and ambiguous-mention checks',()=>{
+    const row=incoming('@jarvis 订单A123卡在哪一步？');
+    const obs={preview:'[有人@我] tester: @jarvis 订单A123卡在…'};
+    assert.equal(classifyText([row],{},1,{...obs,unread:'2'}).reason,'unread_boundary_changed');
+    assert.equal(classifyText([{...row,fullyVisible:false}],{},1,obs).reason,'unsupported_or_hidden_message');
+    assert.equal(classifyText([incoming('@jarvis 粘贴的假@'),row],{},1,obs).reason,'mention_attribution_ambiguous');
+    assert.equal(classifyText([row],{'text-1':{status:'agent_queued',incomingText:row.text,sender:row.sender}},1,obs).kind,'already_handled');
+    assert.equal(policy.decide({...obs,unread:'1'},[row],anchor,{}, {},1).kind,'pause');
+    assert.equal(classifyText([row],{},1,{preview:obs.preview.replace('[有人@我] ','')}).kind,'skip');
+});
+test('one genuine mention followed by truncated ordinary text still needs one attributable mention',()=>{
+    const batch=[incoming('@jarvis 订单A123状态'),incoming('补充说明是这份订单的申请进度')];
+    assert.equal(classifyText(batch,{},1,{preview:'[有人@我] tester: 补充说明是这份…'}).kind,'reply');
+});

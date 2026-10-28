@@ -184,16 +184,38 @@ class WorkerTests(Fixture,unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.get(t["id"])["status"],"needs_human")
 
     async def test_complete_requires_audited_tool_result(self):
-        t=self.running();audit=self.business.query(self.cfg["channel_id"],"query_order","A123")
-        messages=[{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"mcp__biz__query_order","arguments":'{"order_id":"A123"}'}}]},
-                  {"role":"tool","tool_name":"mcp__biz__query_order","tool_call_id":"c1","content":json.dumps(audit)}]
+        t=self.running();messages=[];audits={}
+        for index,tool in enumerate(("query_order","query_trace")):
+            audit=self.business.query(self.cfg["channel_id"],tool,"A123");audits[tool]=audit
+            name="mcp__biz__"+tool;call="call"+str(index)
+            messages.extend([{"role":"assistant","tool_calls":[{"id":call,"function":{"name":name,"arguments":'{"order_id":"A123"}'}}]},
+                             {"role":"tool","tool_name":name,"tool_call_id":call,"content":json.dumps(audit)}])
         class Fake:
             async def request(*args,**kw):return {"data":messages}
         worker=Worker(self.store,self.business,self.cfg)
-        await worker.finish(Fake(),t,{"session_id":t["id"],"output":"模拟数据，待补资料"})
-        self.assertEqual(self.store.get(t["id"])["status"],"draft_ready");self.assertEqual(self.store.outbox(),[])
+        output=json.dumps({"schema":"order_facts.v1","order_id":"A123","order_audit_id":audits["query_order"]["audit_id"],"trace_audit_id":audits["query_trace"]["audit_id"]})
+        await worker.finish(Fake(),t,{"session_id":t["id"],"output":output})
+        saved=self.store.get(t["id"])
+        self.assertEqual(saved["status"],"draft_ready");self.assertEqual(self.store.outbox(),[])
+        self.assertIn("本轮未核实",saved["draft"]);self.assertNotIn("审核未通过",saved["draft"])
+        self.assertTrue(any(e.get("event")=="draft.grounded" for e in self.store.events(t["id"])))
         messages[1]["content"]='{"audit_id":"audit_00000000000000000000000000000000"}'
-        with self.assertRaises(RuntimeError):await worker.finish(Fake(),t,{"session_id":t["id"],"output":"x"})
+        with self.assertRaises(RuntimeError):await worker.finish(Fake(),t,{"session_id":t["id"],"output":output})
+
+    async def test_free_form_hallucination_never_becomes_a_reviewable_draft(self):
+        t=self.running();messages=[]
+        for index,tool in enumerate(("query_order","query_trace")):
+            audit=self.business.query(self.cfg["channel_id"],tool,"A123");name="mcp__biz__"+tool;call="c"+str(index)
+            messages.extend([{"role":"assistant","tool_calls":[{"id":call,"function":{"name":name,"arguments":'{"order_id":"A123"}'}}]},
+                             {"role":"tool","tool_name":name,"tool_call_id":call,"content":json.dumps(audit)}])
+        class Fake:
+            async def request(_,method,path,*args,**kw):
+                if path.startswith('/api/sessions'):return {"data":messages}
+                return {"status":"completed","session_id":t["id"],"output":"原扫描件不清晰，审核未通过，补齐马上通过"}
+            async def events(*args,**kw):pass
+        await Worker(self.store,self.business,self.cfg).process(Fake(),t)
+        self.assertEqual(self.store.get(t["id"])["status"],"needs_human")
+        self.assertIsNone(self.store.get(t["id"])["draft"]);self.assertEqual(self.store.outbox(),[])
 
 
 class ApiTests(Fixture,unittest.IsolatedAsyncioTestCase):

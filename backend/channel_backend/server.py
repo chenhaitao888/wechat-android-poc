@@ -101,7 +101,8 @@ def create_app(cfg, store, business, *, start_worker=True):
         for task in store.tasks():
             message = json.loads(task["message"])
             rows.append({k:task[k] for k in ("id","status","created","draft","version","error","run_id","upstream_status","usage")} |
-                        {"message":message,"source":"web-demo" if task["device"]=="web-demo" else "phone","evidence":collect_evidence(store,business,cfg,task)})
+                        {"message":message,"source":"web-demo" if task["device"]=="web-demo" else "phone","evidence":collect_evidence(store,business,cfg,task),
+                         "grounding":next((e for e in store.events(task["id"]) if e.get("event")=="draft.grounded"),None)})
         return web.json_response({"tasks":rows,"outbox":store.outbox(),"worker":worker.health,"mode":"mock-local"})
 
     async def review(request):

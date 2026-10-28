@@ -268,7 +268,7 @@ function processBatch(observed) {
     waitForChatReady();
     var rows=chatRows();
     var decision=policy.decide(fresh,rows,state.anchor,state.commands,state.textReplies,state.boundaryVersion);
-    event("batch_classified",{unread:fresh.unread,decision:decision});
+    event("batch_classified",{unread:fresh.unread,decision:decision,previewMatch:rows.length ? policy.previewMatch(fresh.preview.replace(/^\[有人@我\]\s*/,""),rows[rows.length-1]) : null});
     if(decision.kind==="pause") {
         files.write(DIR+"pending-batch.json",JSON.stringify({time:new Date().toISOString(),observation:{preview:fresh.preview,unread:fresh.unread},anchor:state.anchor,rows:rows,reason:decision.reason},null,2));
         throw new Error("这批消息无法准确归属 @，已暂停并保留记录："+decision.reason);

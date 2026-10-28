@@ -8,6 +8,19 @@ function sameRows(left, right) {
     for (var i=0;i<left.length;i++) if (signature(left[i]) !== signature(right[i])) return false;
     return true;
 }
+// The ellipsis is only a consistency check against a full message already recovered
+// from the unique unread boundary. Never reconstruct a question from this preview.
+function previewMatch(preview,last) {
+    var actual=compact(preview), full=compact(last.sender+": "+last.text);
+    if(actual===full) return "full";
+    if(actual.slice(-1)!=="…") return null; // only the marker observed on this WeChat version
+    var prefix=actual.slice(0,-1), sender=compact(last.sender+": ");
+    if(prefix.indexOf(sender)!==0 || full.indexOf(prefix)!==0 || prefix.length>=full.length) return null;
+    var visibleBody=prefix.slice(sender.length);
+    if(visibleBody.indexOf("@jarvis")===0) visibleBody=visibleBody.slice(7);
+    if(visibleBody.length<4) return null;
+    return "truncated";
+}
 function pause(reason) { return {kind:"pause", reason:reason}; }
 function decide(observed, rows, anchor, commands, textReplies, boundaryVersion) {
     if (!/^\[有人@我\]/.test(observed.preview)) return {kind:"skip",reason:"no_mention_badge"};
@@ -25,7 +38,7 @@ function decide(observed, rows, anchor, commands, textReplies, boundaryVersion) 
     }
     var last=batch[batch.length-1];
     var preview=observed.preview.replace(/^\[有人@我\]\s*/, "");
-    if(compact(preview)!==compact(last.sender+": "+last.text)) return pause("last_message_does_not_match_preview");
+    if(!previewMatch(preview,last)) return pause("last_message_does_not_match_preview");
     var atCount=0, candidate=null;
     for(var k=0;k<batch.length;k++) {
         var ats=String(batch[k].text).match(/[@＠]/g);
@@ -63,4 +76,4 @@ function stableTail(rows,anchor) {
     for(var i=0;i<=rows.length-anchor.length;i++) if(sameRows(rows.slice(i,i+anchor.length),anchor)) matches++;
     return matches===1;
 }
-module.exports={MAX_UNREAD:MAX_UNREAD,compact:compact,signature:signature,sameRows:sameRows,stableTail:stableTail,decide:decide};
+module.exports={MAX_UNREAD:MAX_UNREAD,compact:compact,signature:signature,sameRows:sameRows,previewMatch:previewMatch,stableTail:stableTail,decide:decide};
