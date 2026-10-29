@@ -479,6 +479,69 @@ class ConfigurationRecoveryTests(unittest.TestCase):
         self.assertFalse(created.exists())
         self.assertFalse(proof.exists())
 
+    def test_cli_star_is_explicit_and_cannot_be_mixed(self):
+        self.up.write_text(json.dumps({"yuque": {"command": "/not-executed-in-this-test"}}))
+        args = ("--upstreams", str(self.up), "--tools", "doc_search,doc_get", "--doc-books")
+        r = ConfigureLiveTests.run_script(self, self.data, *args, "*")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        saved = (self.data/"settings.json").read_bytes()
+        self.assertEqual(json.loads(saved)["doc_books"], ["*"])
+        for books in ("*,team/faq", "*,*", "bad-book"):
+            with self.subTest(books=books):
+                r = ConfigureLiveTests.run_script(self, self.data, *args, books)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual((self.data/"settings.json").read_bytes(), saved)
+        r = ConfigureLiveTests.run_script(self, self.data, *args, "team/faq")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads((self.data/"settings.json").read_text())["doc_books"], ["team/faq"])
+
+
+class AllBooksAndHealthTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.business = Business(Path(self.tmp.name)/"audit.db")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    async def test_star_scope_reads_any_book_but_still_only_read_tools(self):
+        hits = json.dumps({"data": [{"title": "a", "url": "https://hellobike.yuque.com/x/y/1"}, {"title": "no url"}]})
+        up = FakeUpstreams(reply=(True, hits))
+        gw = Gateway(live_cfg(doc_books=["*"]), self.business, up)
+        payload = await gw.call("doc_search", {"q": "退款"})
+        self.assertTrue(payload["ok"]); self.assertEqual(payload["result"], hits)
+        self.assertTrue((await gw.call("doc_get", {"group_login": "any", "book_slug": "book", "id": "1"}))["ok"])
+        for name in ("create_doc", "update_doc", "get_toc", "upload_yuque_to_metis"):
+            self.assertFalse((await gw.call(name, {}))["ok"])
+        self.assertEqual([c[0] for c in up.calls], ["doc_search", "doc_get"])
+
+    def test_invalid_scope_is_rejected_before_starting_gateway(self):
+        for books in ("*", ["*", "*"], ["*", "team/faq"], {"*": True}, [1], ["bad-book"]):
+            with self.subTest(books=books), self.assertRaises(ValueError):
+                Gateway(live_cfg(doc_books=books), self.business, FakeUpstreams())
+
+    async def test_star_keeps_error_scrubbing_and_audited_truncation(self):
+        up = FakeUpstreams(reply=(False, "private-error-body"))
+        gw = Gateway(live_cfg(doc_books=["*"]), self.business, up)
+        result = await gw.call("doc_search", {"q": "退款"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["result"], "")
+        audit = self.business.get(result["audit_id"], "demo-channel-a")
+        self.assertNotIn("private-error-body", json.dumps(audit))
+        up.reply = (True, "x"*7000)
+        result = await gw.call("doc_search", {"q": "退款"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["result"]), 6000)
+        self.assertTrue(self.business.get(result["audit_id"], "demo-channel-a")["result"]["truncated"])
+
+    def test_health_reports_tool_mode(self):
+        from channel_backend.network import connection_info
+        self.assertEqual(connection_info(live_cfg())["mode"], "live-local")
+        self.assertEqual(connection_info({})["mode"], "mock-local")
+        net = {"public_url": "https://bot.example.com"}
+        self.assertEqual(connection_info({**live_cfg(), **net})["mode"], "live-network")
+        self.assertEqual(connection_info(net)["phone_transport"], "network-https")
+
 
 if __name__ == "__main__":
     unittest.main()

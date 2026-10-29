@@ -236,7 +236,28 @@ class ApiTests(Fixture,unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status,200);info=await r.json()
         self.assertEqual(info["device_id"],self.cfg["device_id"])
         self.assertEqual(info["phone_transport"],"usb-loopback")
+        self.assertEqual((info["mode"],info["tool_mode"]),("mock-local","mock"))
         for field in ("review_key","device_key","biz_key","hermes_key"):self.assertNotIn(self.cfg[field],json.dumps(info))
+
+    async def test_health_and_device_info_report_each_mode_over_http(self):
+        for mode in ("mock", "live"):
+            for network in (False, True):
+                with self.subTest(mode=mode, network=network):
+                    self.cfg.update(tool_mode=mode, enabled_tools=["doc_search"])
+                    if network:
+                        self.cfg.update(public_url="https://bot.example.com", backend_id="backend_"+"1"*32)
+                    else:
+                        self.cfg.pop("public_url", None)
+                    expected = mode + ("-network" if network else "-local")
+                    for path in ("/health", "/api/device-info"):
+                        headers = {"Authorization": "Bearer "+self.cfg["device_key"]} if path.endswith("device-info") else {}
+                        r = await self.client.get(path, headers=headers)
+                        self.assertEqual(r.status, 200)
+                        info = await r.json()
+                        self.assertEqual((info["mode"], info["tool_mode"]), (expected, mode))
+                        self.assertEqual(info["phone_transport"], "network-https" if network else "usb-loopback")
+                        for key in ("device_key", "review_key", "hermes_key", "biz_key"):
+                            self.assertNotIn(self.cfg[key], json.dumps(info))
 
     async def test_receive_replay_over_http(self):
         h={"Authorization":"Bearer "+self.cfg["device_key"]};m=self.message()

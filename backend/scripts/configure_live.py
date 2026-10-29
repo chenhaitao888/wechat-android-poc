@@ -7,7 +7,6 @@ import argparse
 import fcntl
 import json
 import os
-import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -16,11 +15,10 @@ from urllib.parse import urlsplit
 import yaml
 
 from channel_backend.settings import LOCAL, load
-from channel_backend.tools import TOOLS, enabled
+from channel_backend.tools import TOOLS, document_books, enabled
 from channel_backend.agent import biz_include
 
 REQUIRED = {"phgraph": {"url", "token"}, "aitool": {"url"}, "yuque": {"command"}}
-BOOK = re.compile(r"[A-Za-z0-9_-]{1,100}/[A-Za-z0-9_-]{1,100}")
 
 
 def write_private(path, content):
@@ -75,10 +73,12 @@ def configure(a):
         books = [b.strip() for b in a.doc_books.split(",") if b.strip()]
         cfg.update(tool_mode="live", enabled_tools=names, doc_books=books, run_timeout=a.run_timeout)
         names = enabled(cfg)
-        if any(not BOOK.fullmatch(b) for b in books):
-            raise SystemExit("--doc-books entries must look like group_login/book_slug")
+        try:
+            document_books(cfg)
+        except ValueError as exc:
+            raise SystemExit("--doc-books: " + str(exc)) from exc
         if any(TOOLS[n]["upstream"] == "yuque" for n in names) and not books:
-            raise SystemExit("doc_* tools need --doc-books: askers may be external, never search the whole key scope")
+            raise SystemExit("doc_* tools need --doc-books: list group_login/book_slug, or '*' for every book the key can read")
         if not a.upstreams:
             raise SystemExit("--upstreams is required for live mode")
         conf = json.loads(a.upstreams.read_text())
@@ -125,7 +125,7 @@ def main():
     p.add_argument("--mock", action="store_true")
     p.add_argument("--tools")
     p.add_argument("--upstreams", type=Path)
-    p.add_argument("--doc-books", default="")
+    p.add_argument("--doc-books", default="", help="group/book,... or '*' (all books the key can read; read-only tools only)")
     p.add_argument("--run-timeout", type=int, default=300)
     p.add_argument("--max-turns", type=int, default=16)
     a = p.parse_args()

@@ -125,6 +125,22 @@ def enabled(cfg):
     return sorted(names)
 
 
+def document_books(cfg):
+    """Validate scope before set conversion; only the exact list ["*"] opts into all books."""
+    books = cfg.get("doc_books", [])
+    if books is None:
+        books = []
+    if not isinstance(books, list) or not all(isinstance(b, str) for b in books):
+        raise ValueError("doc_books must be a list of group_login/book_slug, or exactly ['*']")
+    if books == ["*"]:
+        return {"*"}
+    for book in books:
+        parts = book.split("/")
+        if len(parts) != 2 or not all(SLUG.fullmatch(part) for part in parts):
+            raise ValueError("doc_books entries must be group_login/book_slug, or exactly ['*']")
+    return set(books)
+
+
 def input_schema(name):
     props, required = {}, []
     for key, (kind, rule, needed) in TOOLS[name]["args"].items():

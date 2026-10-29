@@ -10,7 +10,7 @@ import time
 from urllib.parse import urlsplit
 
 from .settings import LOCAL
-from .tools import TOOLS, ToolRefused, enabled, validate
+from .tools import TOOLS, ToolRefused, document_books, enabled, validate
 
 MAX_RESULT = 6000  # results accumulate in the model context; one code question used ~200k tokens at 12000
 MAX_ARGS = 4000
@@ -121,7 +121,9 @@ class Gateway:
     def __init__(self, cfg, business, upstreams):
         self.cfg, self.business, self.upstreams = cfg, business, upstreams
         self.names = set(enabled(cfg) or ())
-        self.books = set(cfg.get("doc_books") or ())
+        self.books = document_books(cfg)
+        # Explicit opt-in: upstream credentials define the scope; results reach the model before human review.
+        self.all_books = self.books == {"*"}
 
     async def call(self, name, raw):
         start = time.monotonic()
@@ -133,13 +135,13 @@ class Gateway:
                 raise ToolRefused("参数过长")
             args = validate(name, raw)
             if TOOLS[name]["upstream"] == "yuque" and not self.books:
-                raise ToolRefused("未配置允许的语雀知识库")  # askers may be external: never search the whole key's scope
-            if name == "doc_get" and f"{args['group_login']}/{args['book_slug']}" not in self.books:
+                raise ToolRefused("未配置允许的语雀知识库")  # No implicit full-key scope when configuration is missing.
+            if name == "doc_get" and not self.all_books and f"{args['group_login']}/{args['book_slug']}" not in self.books:
                 raise ToolRefused("文档不在允许的知识库范围内")
             ok, text = await asyncio.wait_for(self.upstreams.call(name, args), self.cfg.get("upstream_timeout", 60))
             if not ok:
                 error = "上游工具返回错误"
-            elif name == "doc_search":
+            elif name == "doc_search" and not self.all_books:
                 text = scope_search(text, self.books)
         except ToolRefused as exc:
             ok, error = False, str(exc)

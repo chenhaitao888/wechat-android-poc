@@ -35,7 +35,9 @@ def access_policy(cfg):
 
 
 def connection_info(cfg):
-    return {"mode":"mock-network" if cfg.get("public_url") else "mock-local",
+    from .tools import enabled
+    tools = "mock" if enabled(cfg) is None else "live"
+    return {"mode":tools+("-network" if cfg.get("public_url") else "-local"),"tool_mode":tools,
             "phone_transport":"network-https" if cfg.get("public_url") else "usb-loopback"}
 
 
